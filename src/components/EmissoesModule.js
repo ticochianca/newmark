@@ -1,0 +1,1271 @@
+"use client";
+
+import { useState, useEffect, useMemo } from 'react';
+import { supabase } from '@/lib/supabase';
+
+const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+const FOOTER_COBRANCA = `\n\nO boleto já emitido permanece válido por até 30 dias após o vencimento original. Após esse prazo, utilize um dos meios abaixo:\nPix: financeiro@newmark.com.br\nBanco Inter | Agência: 001 | Conta: 23970426-6`;
+
+export default function EmissoesModule() {
+  const today = new Date();
+  const [mes, setMes] = useState(today.getMonth() + 1);
+  const [ano, setAno] = useState(today.getFullYear());
+  const [incluirAtrasadas, setIncluirAtrasadas] = useState(true);
+  const [filtroStatus, setFiltroStatus] = useState('pendentes');
+  const [parcelas, setParcelas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [visao, setVisao] = useState('parcelas'); // 'parcelas' | 'cliente'
+
+  // Individual modal state
+  const [modal, setModal] = useState({ open: false, parcela: null });
+  const [formNF, setFormNF] = useState({ numero: '', file: null });
+  const [formBoleto, setFormBoleto] = useState({ vencimento: '', file: null });
+  const [parsingNF, setParsingNF] = useState(false);
+  const [parsingBoleto, setParsingBoleto] = useState(false);
+  const [parseResultNF, setParseResultNF] = useState(null);
+  const [parseResultBoleto, setParseResultBoleto] = useState(null);
+  const [validacao, setValidacao] = useState(null); // { itens: [...], temAviso: bool }
+  const [saving, setSaving] = useState(false);
+  const [loadingModal, setLoadingModal] = useState(false);
+  const [mensagemPadrao, setMensagemPadrao] = useState(null);
+  const [modalRetencao, setModalRetencao] = useState(0);
+  const [parcelasAtrasadas, setParcelasAtrasadas] = useState([]);
+  const [incluirCobranca, setIncluirCobranca] = useState(false);
+  const [cobrancaSelecionadas, setCobrancaSelecionadas] = useState([]);
+
+  // Consolidated email modal state
+  const [emailModal, setEmailModal] = useState({ open: false, cliente: null, parcelas: [] });
+  const [emailParcelasIncluidas, setEmailParcelasIncluidas] = useState([]);
+  const [emailAtrasadas, setEmailAtrasadas] = useState([]);
+  const [emailAtrasadasIncluidas, setEmailAtrasadasIncluidas] = useState([]);
+  const [emailMensagensContratos, setEmailMensagensContratos] = useState({});
+  const [emailMensagem, setEmailMensagem] = useState('');
+  const [emailMensagemModificada, setEmailMensagemModificada] = useState(false);
+  const [loadingEmailModal, setLoadingEmailModal] = useState(false);
+  const [enviandoEmail, setEnviandoEmail] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/emissoes/setup', { method: 'POST' });
+  }, []);
+
+  useEffect(() => {
+    fetchParcelas();
+  }, [mes, ano, incluirAtrasadas]);
+
+  const fetchParcelas = async () => {
+    setLoading(true);
+    const mesStr = String(mes).padStart(2, '0');
+    const start = `${ano}-${mesStr}-01`;
+    const daysInMonth = new Date(ano, mes, 0).getDate();
+    const end = `${ano}-${mesStr}-${String(daysInMonth).padStart(2, '0')}`;
+    const sel = '*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, clientes(id, nome, apelido, email_cobranca))';
+
+    const [{ data: monthData, error: err1 }, { data: overdueData, error: err2 }] = await Promise.all([
+      supabase.from('parcelas').select(sel)
+        .gte('data_vencimento', start).lte('data_vencimento', end)
+        .order('data_vencimento', { ascending: true }),
+      incluirAtrasadas
+        ? supabase.from('parcelas').select(sel)
+            .lt('data_vencimento', start).not('status', 'eq', 'Paga')
+            .order('data_vencimento', { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    if (err1) console.error('Erro (mês):', err1.message);
+    if (err2) console.error('Erro (atrasadas):', err2.message);
+
+    setParcelas([...(overdueData || []), ...(monthData || [])]);
+    setLoading(false);
+  };
+
+  // ─── helpers ──────────────────────────────────────────────────────────────
+
+  const getMesPrestacao = (p) => {
+    const isMesmoMes = p.contratos?.cobranca_mesmo_mes;
+    const dataBase = p.data_original || p.data_vencimento;
+    if (!dataBase) return '';
+    const d = new Date(dataBase + 'T12:00:00');
+    if (!isMesmoMes) d.setUTCMonth(d.getUTCMonth() - 1);
+    return d.toLocaleString('pt-BR', { month: 'short', year: '2-digit', timeZone: 'UTC' })
+      .replace('. de ', '/').replace('.', '');
+  };
+
+  const getMesPrestacaoLong = (p) => {
+    const isMesmoMes = p.contratos?.cobranca_mesmo_mes;
+    const dataBase = p.data_original || p.data_vencimento;
+    if (!dataBase) return '';
+    const d = new Date(dataBase + 'T12:00:00');
+    if (!isMesmoMes) d.setUTCMonth(d.getUTCMonth() - 1);
+    const m = d.toLocaleString('pt-BR', { month: 'long', timeZone: 'UTC' });
+    return `${m.charAt(0).toUpperCase() + m.slice(1)} de ${d.getUTCFullYear()}`;
+  };
+
+  // Individual modal: uses form state for live preview
+  const resolveMessage = (template, p) => {
+    if (!template || !p) return null;
+    const cliente = p.contratos?.clientes;
+    const nfNum = formNF.numero || p.nf_numero || '';
+    const boletoNum = formBoleto.numero || p.boleto_numero || '';
+    return template
+      .replace(/\{cliente\}/gi, cliente?.apelido || cliente?.nome || '')
+      .replace(/\{contrato\}/gi, p.contratos?.titulo || '')
+      .replace(/\{valor\}/gi, `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`)
+      .replace(/\{vencimento\}/gi, p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '')
+      .replace(/\{competencia\}/gi, getMesPrestacaoLong(p))
+      .replace(/\{nf\}/gi, nfNum || '[nº da NF]')
+      .replace(/\{boleto\}/gi, boletoNum || '[nº do boleto]');
+  };
+
+  // Consolidated email: uses only stored DB values
+  const resolveTemplate = (template, p) => {
+    if (!template || !p) return null;
+    const cliente = p.contratos?.clientes;
+    return template
+      .replace(/\{cliente\}/gi, cliente?.apelido || cliente?.nome || '')
+      .replace(/\{contrato\}/gi, p.contratos?.titulo || '')
+      .replace(/\{valor\}/gi, `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`)
+      .replace(/\{vencimento\}/gi, p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '')
+      .replace(/\{competencia\}/gi, getMesPrestacaoLong(p))
+      .replace(/\{nf\}/gi, p.nf_numero || '[nº da NF]')
+      .replace(/\{boleto\}/gi, p.boleto_numero || '[nº do boleto]');
+  };
+
+  const isOverdue = (p) => {
+    if (p.status === 'Paga') return false;
+    return new Date(p.data_vencimento + 'T12:00:00') < today;
+  };
+
+  const getNFStatus = (p) => p.nf_numero
+    ? { label: 'Emitida', color: '#10b981', bg: '#ecfdf5' }
+    : { label: 'Pendente', color: '#ef4444', bg: '#fef2f2' };
+
+  const getBoletoStatus = (p) => p.boleto_arquivo_url
+    ? { label: 'Emitido', color: '#10b981', bg: '#ecfdf5' }
+    : { label: 'Pendente', color: '#ef4444', bg: '#fef2f2' };
+
+  // ─── Individual modal ─────────────────────────────────────────────────────
+
+  const openModal = async (p) => {
+    setModal({ open: true, parcela: p });
+    setFormNF({ numero: p.nf_numero || '', file: null });
+    setFormBoleto({ vencimento: p.data_vencimento || '', file: null });
+    setIncluirCobranca(false);
+    setCobrancaSelecionadas([]);
+    setParcelasAtrasadas([]);
+    setMensagemPadrao(null);
+    setLoadingModal(true);
+
+    const clienteId = p.contratos?.cliente_id;
+
+    const { data: contratoData } = await supabase
+      .from('contratos')
+      .select('mensagem_padrao, percentual_retencao')
+      .eq('id', p.contrato_id)
+      .maybeSingle();
+
+    setMensagemPadrao(contratoData?.mensagem_padrao || null);
+    setModalRetencao(contratoData?.percentual_retencao || 0);
+
+    if (clienteId) {
+      const hojStr = today.toISOString().split('T')[0];
+      const { data: clientContratos } = await supabase
+        .from('contratos')
+        .select('id, titulo')
+        .eq('cliente_id', clienteId);
+
+      if (clientContratos && clientContratos.length > 0) {
+        const contratoIds = clientContratos.map(c => c.id);
+        const { data: atrasadas } = await supabase
+          .from('parcelas')
+          .select('*, contratos(titulo, cobranca_mesmo_mes)')
+          .in('contrato_id', contratoIds)
+          .not('status', 'eq', 'Paga')
+          .lt('data_vencimento', hojStr)
+          .neq('id', p.id)
+          .order('data_vencimento', { ascending: true });
+
+        setParcelasAtrasadas(atrasadas || []);
+      }
+    }
+
+    setLoadingModal(false);
+  };
+
+  const closeModal = () => {
+    setModal({ open: false, parcela: null });
+    setParcelasAtrasadas([]);
+    setMensagemPadrao(null);
+    setModalRetencao(0);
+    setParseResultNF(null);
+    setParseResultBoleto(null);
+    setValidacao(null);
+  };
+
+  const handleToggleCobranca = (val) => {
+    setIncluirCobranca(val);
+    setCobrancaSelecionadas(val ? parcelasAtrasadas.map(p => p.id) : []);
+  };
+
+  const toggleCobrancaItem = (id) => {
+    setCobrancaSelecionadas(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    const p = modal.parcela;
+    let nfUrl = p.nf_arquivo_url;
+    let boletoUrl = p.boleto_arquivo_url;
+
+    if (formNF.file) {
+      const fd = new FormData();
+      fd.append('file', formNF.file);
+      fd.append('parcelaId', p.id);
+      fd.append('tipo', 'nf');
+      const res = await fetch('/api/emissoes/upload', { method: 'POST', body: fd });
+      const json = await res.json();
+      if (json.error) { alert('Erro no upload da NF: ' + json.error); setSaving(false); return; }
+      nfUrl = json.url;
+    }
+
+    if (formBoleto.file) {
+      const fd = new FormData();
+      fd.append('file', formBoleto.file);
+      fd.append('parcelaId', p.id);
+      fd.append('tipo', 'boleto');
+      const res = await fetch('/api/emissoes/upload', { method: 'POST', body: fd });
+      const json = await res.json();
+      if (json.error) { alert('Erro no upload do boleto: ' + json.error); setSaving(false); return; }
+      boletoUrl = json.url;
+    }
+
+    let newStatus = p.status;
+    if (formNF.numero && !['NF Emitida', 'Paga'].includes(p.status)) newStatus = 'NF Emitida';
+    if (!formNF.numero && p.status === 'NF Emitida') newStatus = 'Pendente';
+
+    const { error } = await supabase.from('parcelas').update({
+      nf_numero: formNF.numero || null,
+      nf_arquivo_url: nfUrl,
+      boleto_arquivo_url: boletoUrl,
+      data_vencimento: formBoleto.vencimento || p.data_vencimento,
+      status: newStatus,
+    }).eq('id', p.id);
+
+    if (error) alert('Erro: ' + error.message);
+    else { closeModal(); fetchParcelas(); }
+    setSaving(false);
+  };
+
+  const parseFile = async (file, tipo) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('tipo', tipo);
+    const res = await fetch('/api/emissoes/parse', { method: 'POST', body: fd });
+    return res.json();
+  };
+
+  const salvarEnderecoCliente = async (result, parcela) => {
+    const clienteId = parcela?.contratos?.cliente_id;
+    if (!clienteId || !result.cidade) return;
+    const { data: cli } = await supabase.from('clientes').select('cidade').eq('id', clienteId).single();
+    if (cli?.cidade) return; // já tem endereço, não sobrescreve
+    await supabase.from('clientes').update({
+      endereco: result.endereco || null,
+      numero_endereco: result.numero || null,
+      complemento_endereco: result.complemento || null,
+      bairro: result.bairro || null,
+      cidade: result.cidade || null,
+      estado: result.estado || null,
+      cep: result.cep || null,
+      telefone: result.telefone || null,
+    }).eq('id', clienteId);
+  };
+
+  const handleNFFileChange = async (file) => {
+    setFormNF(prev => ({ ...prev, file }));
+    if (!file) return;
+    setParsingNF(true);
+    setParseResultNF(null);
+    const result = await parseFile(file, 'nf');
+    setParsingNF(false);
+    if (result.error) { setParseResultNF({ erro: result.error }); return; }
+    if (result.numero) setFormNF(prev => ({ ...prev, numero: result.numero }));
+    setParseResultNF(result);
+    salvarEnderecoCliente(result, modal.parcela);
+  };
+
+  const handleBoletoFileChange = async (file) => {
+    setFormBoleto(prev => ({ ...prev, file }));
+    if (!file) return;
+    setParsingBoleto(true);
+    setParseResultBoleto(null);
+    const result = await parseFile(file, 'boleto');
+    setParsingBoleto(false);
+    if (result.error) { setParseResultBoleto({ erro: result.error }); return; }
+    if (result.vencimento) setFormBoleto(prev => ({ ...prev, vencimento: result.vencimento }));
+    setParseResultBoleto(result);
+  };
+
+  const cruzarDados = (rNF, rBol, parcela) => {
+    const itens = [];
+    const normalize = (s) => (s || '').toLowerCase().replace(/[.\-\/\s]+/g, '');
+
+    // 1. Número NFS-e vs Nº Documento boleto
+    if (rNF.numero && rBol.numeroDocumento) {
+      const ok = normalize(rNF.numero) === normalize(rBol.numeroDocumento);
+      itens.push({ label: 'Nº NFS-e × Nº Documento boleto', ok, nf: rNF.numero, boleto: rBol.numeroDocumento });
+    } else {
+      itens.push({ label: 'Nº NFS-e × Nº Documento boleto', ok: null, nf: rNF.numero, boleto: rBol.numeroDocumento });
+    }
+
+    // 2. Nome empresarial vs Pagador
+    if (rNF.cliente && rBol.pagador) {
+      const ok = normalize(rNF.cliente).includes(normalize(rBol.pagador).substring(0, 8))
+        || normalize(rBol.pagador).includes(normalize(rNF.cliente).substring(0, 8));
+      itens.push({ label: 'Cliente NF × Pagador boleto', ok, nf: rNF.cliente, boleto: rBol.pagador });
+    } else {
+      itens.push({ label: 'Cliente NF × Pagador boleto', ok: null, nf: rNF.cliente, boleto: rBol.pagador });
+    }
+
+    // 3. Mês da descrição vs competência da parcela
+    if (rNF.descricao && parcela) {
+      const MESES_PT = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+      const m = rNF.descricao.match(/(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[^\s\/\d\-]*[\s\/\-]?(\d{2,4})/i);
+      if (m) {
+        const mesDesc = MESES_PT.findIndex(x => rNF.descricao.toLowerCase().includes(x)) + 1;
+        const anoDesc = m[1].length === 2 ? 2000 + parseInt(m[1]) : parseInt(m[1]);
+        const compParcela = getMesPrestacaoLong(parcela); // "Março de 2026"
+        const mesParc = MESES_PT.findIndex(x => compParcela.toLowerCase().includes(x)) + 1;
+        const anoParc = parseInt(compParcela.split(' ').pop());
+        const ok = mesDesc === mesParc && anoDesc === anoParc;
+        itens.push({ label: 'Competência (descrição NF × parcela)', ok, nf: `mês ${mesDesc}/${anoDesc}`, boleto: compParcela });
+      } else {
+        itens.push({ label: 'Competência (descrição NF × parcela)', ok: null, nf: rNF.descricao?.substring(0, 60), boleto: getMesPrestacaoLong(parcela) });
+      }
+    }
+
+    // 4. Valor NF vs valor parcela
+    if (rNF.valor && parcela) {
+      const parseValor = (s) => parseFloat((s || '').replace(/\./g, '').replace(',', '.'));
+      const vNF = parseValor(rNF.valor);
+      const vParc = Number(parcela.valor);
+      const ok = Math.abs(vNF - vParc) < 0.01;
+      itens.push({
+        label: 'Valor NF × valor parcela',
+        ok,
+        nf: `R$ ${rNF.valor}`,
+        boleto: `R$ ${vParc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
+      });
+    }
+
+    // Valor boleto vs valor NF (se ambos disponíveis), tolerando retenção na fonte
+    if (rNF.valor && rBol.valor) {
+      const parseValor = (s) => parseFloat((s || '').replace(/\./g, '').replace(',', '.'));
+      const vNF = parseValor(rNF.valor);
+      const vBol = parseValor(rBol.valor);
+      const retencao = modalRetencao || 0;
+      if (retencao > 0) {
+        const vLiquido = vNF * (1 - retencao / 100);
+        const ok = Math.abs(vBol - vLiquido) < 0.02;
+        itens.push({
+          label: `Valor boleto × líquido NF (${retencao}% retenção)`,
+          ok,
+          nf: `R$ ${rNF.valor} → líquido R$ ${vLiquido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
+          boleto: `R$ ${rBol.valor}`,
+        });
+      } else {
+        const ok = Math.abs(vNF - vBol) < 0.01;
+        itens.push({ label: 'Valor NF × valor boleto', ok, nf: `R$ ${rNF.valor}`, boleto: `R$ ${rBol.valor}` });
+      }
+    }
+
+    return { itens, temAviso: itens.some(i => i.ok === false) };
+  };
+
+  // Recebe até 2 arquivos, classifica cada um pelo conteúdo e preenche os campos certos
+  const handleCombinedUpload = async (files) => {
+    if (!files || files.length === 0) return;
+    setParsingNF(true);
+    setParsingBoleto(true);
+    setParseResultNF(null);
+    setParseResultBoleto(null);
+
+    const results = await Promise.all(
+      Array.from(files).slice(0, 2).map(async (file) => {
+        // Parse as both types in parallel and classify by what we find
+        const [rNF, rBol] = await Promise.all([
+          parseFile(file, 'nf'),
+          parseFile(file, 'boleto'),
+        ]);
+        // Score: NF wins if it has numero; Boleto wins if it has pagador
+        const nfScore = (rNF.numero ? 2 : 0) + (rNF.cliente ? 1 : 0) + (rNF.descricao ? 1 : 0);
+        const bolScore = (rBol.pagador ? 2 : 0) + (rBol.vencimento ? 1 : 0) + (rBol.numeroDocumento ? 1 : 0);
+        return { file, tipo: nfScore >= bolScore ? 'nf' : 'boleto', rNF, rBol };
+      })
+    );
+
+    // If both scored same type, keep first classification and flip the second
+    if (results.length === 2 && results[0].tipo === results[1].tipo) {
+      results[1].tipo = results[0].tipo === 'nf' ? 'boleto' : 'nf';
+    }
+
+    let finalNF = null, finalBol = null;
+
+    results.forEach(({ file, tipo, rNF, rBol }) => {
+      if (tipo === 'nf') {
+        setFormNF(prev => ({ ...prev, file, numero: rNF.numero || prev.numero }));
+        setParseResultNF(rNF.error ? { erro: rNF.error } : rNF);
+        salvarEnderecoCliente(rNF, modal.parcela);
+        finalNF = rNF;
+      } else {
+        setFormBoleto(prev => ({ ...prev, file, vencimento: rBol.vencimento || prev.vencimento }));
+        setParseResultBoleto(rBol.error ? { erro: rBol.error } : rBol);
+        finalBol = rBol;
+      }
+    });
+
+    // Cross-validation when both files were processed
+    if (finalNF && finalBol && modal.parcela) {
+      setValidacao(cruzarDados(finalNF, finalBol, modal.parcela));
+    }
+
+    setParsingNF(false);
+    setParsingBoleto(false);
+  };
+
+  // ─── Consolidated email modal ─────────────────────────────────────────────
+
+  const openEmailModal = async (grupo) => {
+    const { cliente, parcelas: gParcelas } = grupo;
+    setEmailModal({ open: true, cliente, parcelas: gParcelas });
+    // Pre-select parcelas that have at least an NF number or file
+    setEmailParcelasIncluidas(gParcelas.filter(p => p.nf_numero || p.nf_arquivo_url).map(p => p.id));
+    setEmailAtrasadas([]);
+    setEmailAtrasadasIncluidas([]);
+    setEmailMensagensContratos({});
+    setEmailMensagem('');
+    setEmailMensagemModificada(false);
+    setLoadingEmailModal(true);
+
+    const clienteId = cliente?.id;
+    const groupIds = new Set(gParcelas.map(p => p.id));
+
+    const [{ data: clientContratos }, { data: atrasadasRaw }] = await Promise.all([
+      supabase.from('contratos').select('id, mensagem_padrao').eq('cliente_id', clienteId),
+      supabase.from('parcelas')
+        .select('*, contratos(id, titulo, cobranca_mesmo_mes)')
+        .in('contrato_id', gParcelas.map(p => p.contrato_id))
+        .not('status', 'eq', 'Paga')
+        .lt('data_vencimento', today.toISOString().split('T')[0])
+        .order('data_vencimento', { ascending: true }),
+    ]);
+
+    const mensagens = {};
+    (clientContratos || []).forEach(c => { mensagens[c.id] = c.mensagem_padrao || null; });
+    setEmailMensagensContratos(mensagens);
+
+    // Exclude parcelas that are already in the group (already shown in period section)
+    const atrasadas = (atrasadasRaw || []).filter(p => !groupIds.has(p.id));
+    setEmailAtrasadas(atrasadas);
+
+    setLoadingEmailModal(false);
+  };
+
+  const closeEmailModal = () => {
+    setEmailModal({ open: false, cliente: null, parcelas: [] });
+    setEmailAtrasadas([]);
+    setEmailMensagensContratos({});
+  };
+
+  const toggleEmailParcela = (id) => {
+    setEmailParcelasIncluidas(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+    setEmailMensagemModificada(false);
+  };
+
+  const toggleEmailAtrasada = (id) => {
+    setEmailAtrasadasIncluidas(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+    setEmailMensagemModificada(false);
+  };
+
+  // ─── derived render values ─────────────────────────────────────────────────
+
+  const parcelasFiltradas = parcelas.filter(p => {
+    switch (filtroStatus) {
+      case 'pendentes': return p.status !== 'Paga';
+      case 'sem_nf':    return !p.nf_numero && p.status !== 'Paga';
+      case 'nf_ok':     return p.nf_numero && !p.boleto_numero && p.status !== 'Paga';
+      default:          return true;
+    }
+  });
+
+  const countSemNF = parcelas.filter(p => !p.nf_numero && p.status !== 'Paga').length;
+  const countNFok  = parcelas.filter(p => p.nf_numero && !p.boleto_numero && p.status !== 'Paga').length;
+
+  const anosDisponiveis = [];
+  for (let y = today.getFullYear() - 2; y <= today.getFullYear() + 2; y++) anosDisponiveis.push(y);
+
+  // Individual modal preview
+  const modalParcela = modal.parcela;
+  const msgPrincipal = mensagemPadrao && modalParcela ? resolveMessage(mensagemPadrao, modalParcela) : null;
+
+  const atrasadasParaCobranca = cobrancaSelecionadas
+    .map(id => parcelasAtrasadas.find(p => p.id === id))
+    .filter(Boolean);
+
+  let previewCompleto = null;
+  if (msgPrincipal || (incluirCobranca && atrasadasParaCobranca.length > 0)) {
+    const parts = [];
+    if (msgPrincipal) parts.push(msgPrincipal);
+    if (incluirCobranca && atrasadasParaCobranca.length > 0) {
+      const itens = atrasadasParaCobranca.map(p => {
+        const comp  = getMesPrestacaoLong(p);
+        const valor = `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+        const venc  = p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '';
+        return `• ${p.contratos?.titulo || 'Contrato'} — ref. ${comp} — ${valor} (venc. ${venc})`;
+      }).join('\n');
+      parts.push(`⚠️ Identificamos parcela(s) em atraso:\n${itens}${FOOTER_COBRANCA}`);
+    }
+    previewCompleto = parts.join('\n\n---\n\n');
+  }
+
+  // "Por Cliente" grouped view
+  const parcelasGroupedByCliente = useMemo(() => {
+    const groups = {};
+    parcelas.filter(p => p.status !== 'Paga').forEach(p => {
+      const cId = p.contratos?.cliente_id;
+      if (!cId) return;
+      if (!groups[cId]) groups[cId] = { cliente: p.contratos?.clientes, parcelas: [] };
+      groups[cId].parcelas.push(p);
+    });
+    return Object.values(groups).sort((a, b) =>
+      (a.cliente?.apelido || a.cliente?.nome || '').localeCompare(b.cliente?.apelido || b.cliente?.nome || '')
+    );
+  }, [parcelas]);
+
+  // Auto-generated consolidated message (recalculated when selections or templates change)
+  const mensagemAutoGerada = useMemo(() => {
+    if (loadingEmailModal || !emailModal.open) return '';
+
+    const parcelasDoEmail = emailModal.parcelas.filter(p => emailParcelasIncluidas.includes(p.id));
+    const atrasadasDoEmail = emailAtrasadas.filter(p => emailAtrasadasIncluidas.includes(p.id));
+    const parts = [];
+
+    const byContrato = {};
+    parcelasDoEmail.forEach(p => {
+      if (!byContrato[p.contrato_id]) byContrato[p.contrato_id] = [];
+      byContrato[p.contrato_id].push(p);
+    });
+
+    Object.entries(byContrato).forEach(([cId, cParcelas]) => {
+      const template = emailMensagensContratos[cId];
+      cParcelas.forEach(p => {
+        if (template) {
+          const resolved = resolveTemplate(template, p);
+          if (resolved) parts.push(resolved);
+        } else {
+          const valor = `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+          const venc  = p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '';
+          parts.push(`${p.contratos?.titulo || 'Contrato'} — ${getMesPrestacaoLong(p)} — ${valor} (venc. ${venc})`);
+        }
+      });
+    });
+
+    if (atrasadasDoEmail.length > 0) {
+      const itens = atrasadasDoEmail.map(p => {
+        const valor = `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+        const venc  = p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '';
+        return `• ${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${valor} (venc. ${venc})`;
+      }).join('\n');
+      parts.push(`⚠️ Identificamos parcela(s) em atraso:\n${itens}${FOOTER_COBRANCA}`);
+    }
+
+    return parts.join('\n\n---\n\n');
+  }, [emailParcelasIncluidas, emailAtrasadasIncluidas, emailMensagensContratos, emailAtrasadas, emailModal.open, loadingEmailModal, emailModal.parcelas]);
+
+  // Attachments for selected parcelas
+  const emailAnexos = useMemo(() => {
+    const anexos = [];
+    const allSelected = [
+      ...emailModal.parcelas.filter(p => emailParcelasIncluidas.includes(p.id)),
+      ...emailAtrasadas.filter(p => emailAtrasadasIncluidas.includes(p.id)),
+    ];
+    allSelected.forEach(p => {
+      if (p.nf_arquivo_url) anexos.push({ label: `Newmark - NF ${p.nf_numero || ''}`, url: p.nf_arquivo_url });
+      if (p.boleto_arquivo_url) anexos.push({ label: `Newmark - NF ${p.nf_numero || ''} - Boleto`, url: p.boleto_arquivo_url });
+    });
+    return anexos;
+  }, [emailParcelasIncluidas, emailAtrasadasIncluidas, emailModal.parcelas, emailAtrasadas]);
+
+  // ─── envio de e-mail ──────────────────────────────────────────────────────
+
+  const handleEnviarEmailIndividual = async () => {
+    const p = modal.parcela;
+    const cliente = p.contratos?.clientes;
+    const para = cliente?.email_cobranca;
+    if (!para) { alert('Este cliente não tem e-mail de cobrança cadastrado.'); return; }
+    if (!previewCompleto) { alert('Nenhuma mensagem para enviar. Configure a mensagem padrão no contrato.'); return; }
+
+    const assunto = `Cobrança — ${cliente?.apelido || cliente?.nome} — ${getMesPrestacaoLong(p)}`;
+    const anexos = [];
+    if (p.nf_arquivo_url) anexos.push({ label: `Newmark - NF ${p.nf_numero || ''}`, url: p.nf_arquivo_url });
+    if (p.boleto_arquivo_url) anexos.push({ label: `Newmark - NF ${p.nf_numero || ''} - Boleto`, url: p.boleto_arquivo_url });
+
+    setEnviandoEmail(true);
+    const res = await fetch('/api/emissoes/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ para, assunto, mensagem: previewCompleto, anexos, parcelaIds: [p.id] }),
+    });
+    const json = await res.json();
+    setEnviandoEmail(false);
+
+    if (json.error) { alert('Erro ao enviar: ' + json.error); return; }
+    alert(`E-mail enviado para ${para}!`);
+    closeModal();
+    fetchParcelas();
+  };
+
+  const handleEnviarEmailConsolidado = async () => {
+    const cliente = emailModal.cliente;
+    const para = cliente?.email_cobranca;
+    if (!para) { alert('Este cliente não tem e-mail de cobrança cadastrado.'); return; }
+
+    const mensagem = emailMensagemModificada ? emailMensagem : mensagemAutoGerada;
+    if (!mensagem.trim()) { alert('Mensagem vazia. Selecione ao menos uma parcela.'); return; }
+
+    const assunto = `Cobrança — ${cliente?.apelido || cliente?.nome} — ${MESES[mes - 1]}/${ano}`;
+    const parcelaIds = [...emailParcelasIncluidas, ...emailAtrasadasIncluidas];
+
+    setEnviandoEmail(true);
+    const res = await fetch('/api/emissoes/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ para, assunto, mensagem, anexos: emailAnexos, parcelaIds }),
+    });
+    const json = await res.json();
+    setEnviandoEmail(false);
+
+    if (json.error) { alert('Erro ao enviar: ' + json.error); return; }
+    alert(`E-mail enviado para ${para}!`);
+    closeEmailModal();
+    fetchParcelas();
+  };
+
+  // ─── render ───────────────────────────────────────────────────────────────
+
+  return (
+    <section className="content-area active">
+
+      {/* Header */}
+      <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <h2 style={{ marginRight: 'auto', color: 'var(--secondary)', fontSize: '18px' }}>Controle de Emissões</h2>
+        {countSemNF > 0 && (
+          <span style={{ backgroundColor: '#fef2f2', color: '#ef4444', border: '1px solid #fecaca', borderRadius: '12px', padding: '2px 12px', fontSize: '12px', fontWeight: 600 }}>
+            {countSemNF} sem NF
+          </span>
+        )}
+        {countNFok > 0 && (
+          <span style={{ backgroundColor: '#fffbeb', color: '#d97706', border: '1px solid #fde68a', borderRadius: '12px', padding: '2px 12px', fontSize: '12px', fontWeight: 600 }}>
+            {countNFok} sem boleto
+          </span>
+        )}
+      </div>
+
+      {/* Filtros + toggle de visão */}
+      <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <select className="form-control" style={{ width: '150px' }} value={mes} onChange={e => setMes(Number(e.target.value))}>
+          {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+        </select>
+        <select className="form-control" style={{ width: '90px' }} value={ano} onChange={e => setAno(Number(e.target.value))}>
+          {anosDisponiveis.map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-main)', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={incluirAtrasadas} onChange={e => setIncluirAtrasadas(e.target.checked)} />
+          Incluir em atraso
+        </label>
+        <select className="form-control" style={{ width: '200px' }} value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)}>
+          <option value="pendentes">Todos pendentes</option>
+          <option value="sem_nf">Sem NF</option>
+          <option value="nf_ok">NF ok, sem boleto</option>
+          <option value="todos">Todos (incl. pagos)</option>
+        </select>
+        <div style={{ marginLeft: 'auto', display: 'flex', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+          {[['parcelas', 'Por Parcela'], ['cliente', 'Por Cliente']].map(([val, label]) => (
+            <button
+              key={val}
+              style={{
+                padding: '6px 14px', fontSize: '12px', border: 'none', cursor: 'pointer',
+                borderLeft: val === 'cliente' ? '1px solid var(--border)' : 'none',
+                backgroundColor: visao === val ? 'var(--secondary)' : 'transparent',
+                color: visao === val ? '#fff' : 'var(--text-main)',
+                fontWeight: visao === val ? 700 : 400,
+              }}
+              onClick={() => setVisao(val)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Tabela Por Parcela ───────────────────────────────────────────────── */}
+      {visao === 'parcelas' && (
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Cliente / Contrato</th>
+                <th style={{ textAlign: 'center' }}>Competência</th>
+                <th style={{ textAlign: 'right' }}>Valor</th>
+                <th style={{ textAlign: 'center' }}>Vencimento</th>
+                <th style={{ textAlign: 'center' }}>Nota Fiscal</th>
+                <th style={{ textAlign: 'center' }}>Boleto</th>
+                <th style={{ textAlign: 'center' }}>E-mail</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px' }}>Carregando...</td></tr>
+              ) : parcelasFiltradas.length === 0 ? (
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Nenhuma parcela encontrada para este período.</td></tr>
+              ) : parcelasFiltradas.map(p => {
+                const nfSt = getNFStatus(p);
+                const bolSt = getBoletoStatus(p);
+                const overdue = isOverdue(p);
+                const cliente = p.contratos?.clientes;
+                return (
+                  <tr key={p.id} style={{ opacity: p.status === 'Paga' ? 0.55 : 1 }}>
+                    <td>
+                      <strong style={{ display: 'block', color: 'var(--secondary)' }}>{cliente?.apelido || cliente?.nome}</strong>
+                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{p.contratos?.titulo}</span>
+                    </td>
+                    <td style={{ textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>{getMesPrestacao(p)}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <div style={{ fontSize: '13px' }}>{new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</div>
+                      {overdue && <div style={{ fontSize: '10px', color: '#ef4444', fontWeight: 700, marginTop: '2px' }}>EM ATRASO</div>}
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: nfSt.color, backgroundColor: nfSt.bg, border: `1px solid ${nfSt.color}40`, borderRadius: '4px', padding: '1px 8px' }}>{nfSt.label}</span>
+                        {p.nf_numero && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>#{p.nf_numero}</span>}
+                        {p.nf_arquivo_url && <a href={p.nf_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '10px', color: 'var(--secondary)', textDecoration: 'underline' }}>Ver arquivo</a>}
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: bolSt.color, backgroundColor: bolSt.bg, border: `1px solid ${bolSt.color}40`, borderRadius: '4px', padding: '1px 8px' }}>{bolSt.label}</span>
+                        {p.boleto_arquivo_url && <a href={p.boleto_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '10px', color: 'var(--secondary)', textDecoration: 'underline' }}>Ver arquivo</a>}
+                      </div>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      {p.email_enviado
+                        ? <span style={{ fontSize: '11px', fontWeight: 600, color: '#10b981', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '4px', padding: '1px 8px' }}>Enviado</span>
+                        : <span style={{ fontSize: '11px', color: '#94a3b8', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1px 8px' }}>Em breve</span>
+                      }
+                    </td>
+                    <td>
+                      <button className="btn btn-secondary" style={{ fontSize: '12px', padding: '4px 10px', whiteSpace: 'nowrap' }} onClick={() => openModal(p)}>
+                        Gerenciar
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Tabela Por Cliente ───────────────────────────────────────────────── */}
+      {visao === 'cliente' && (
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Cliente</th>
+                <th style={{ textAlign: 'center' }}>Parcelas</th>
+                <th style={{ textAlign: 'center' }}>NFs</th>
+                <th style={{ textAlign: 'center' }}>Boletos</th>
+                <th style={{ textAlign: 'right' }}>Total</th>
+                <th>E-mail de Cobrança</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '40px' }}>Carregando...</td></tr>
+              ) : parcelasGroupedByCliente.length === 0 ? (
+                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Nenhum cliente com parcelas pendentes.</td></tr>
+              ) : parcelasGroupedByCliente.map(grupo => {
+                const { cliente, parcelas: gParcelas } = grupo;
+                const totalNF = gParcelas.filter(p => p.nf_numero).length;
+                const totalBoleto = gParcelas.filter(p => p.boleto_numero).length;
+                const totalValor = gParcelas.reduce((s, p) => s + Number(p.valor), 0);
+                const temAtrasada = gParcelas.some(p => isOverdue(p));
+                return (
+                  <tr key={cliente?.id}>
+                    <td>
+                      <strong style={{ color: 'var(--secondary)' }}>{cliente?.apelido || cliente?.nome}</strong>
+                      {temAtrasada && <span style={{ marginLeft: '8px', fontSize: '10px', color: '#ef4444', fontWeight: 700 }}>EM ATRASO</span>}
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span style={{ fontWeight: 600 }}>{gParcelas.length}</span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>parcelas</span>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: totalNF === gParcelas.length ? '#10b981' : '#ef4444' }}>
+                        {totalNF}/{gParcelas.length}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>emitidas</span>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 600, color: totalBoleto === gParcelas.length ? '#10b981' : '#d97706' }}>
+                        {totalBoleto}/{gParcelas.length}
+                      </span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>emitidos</span>
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      R$ {totalValor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                      {cliente?.email_cobranca || '—'}
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-primary"
+                        style={{ fontSize: '12px', padding: '4px 12px', whiteSpace: 'nowrap' }}
+                        onClick={() => openEmailModal(grupo)}
+                      >
+                        Compor E-mail
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Modal Individual ─────────────────────────────────────────────────── */}
+      <div className={`modal-overlay ${modal.open ? 'active' : ''}`}>
+        <div className="modal" style={{ maxWidth: '640px' }}>
+          <div className="modal-header">
+            <h2>Gerenciar Emissão</h2>
+            <button className="close-modal" onClick={closeModal}>&times;</button>
+          </div>
+
+          <div className="modal-body">
+            {modalParcela && (() => {
+              const p = modalParcela;
+              const cliente = p.contratos?.clientes;
+              return (
+                <>
+                  <div style={{ marginBottom: '18px', padding: '12px 14px', backgroundColor: 'var(--bg-dark)', borderRadius: '8px', fontSize: '13px' }}>
+                    <strong style={{ color: 'var(--secondary)', display: 'block', marginBottom: '5px', fontSize: '14px' }}>
+                      {cliente?.apelido || cliente?.nome} — {p.contratos?.titulo}
+                    </strong>
+                    <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', color: 'var(--text-main)' }}>
+                      <span><strong>Valor:</strong> R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      <span><strong>Vencimento:</strong> {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</span>
+                      <span><strong>Competência:</strong> {getMesPrestacaoLong(p)}</span>
+                    </div>
+                    <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                      <strong>E-mail de cobrança:</strong> {cliente?.email_cobranca || '—'}
+                    </div>
+                    {modalRetencao > 0 && (
+                      <div style={{ marginTop: '6px', fontSize: '12px', color: '#0369a1', backgroundColor: '#e0f2fe', borderRadius: '4px', padding: '4px 8px', display: 'inline-block' }}>
+                        💧 Retenção na fonte: {modalRetencao}% — Boleto esperado: R$ {(Number(p.valor) * (1 - modalRetencao / 100)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Upload combinado */}
+                  <div style={{ marginBottom: '16px', padding: '12px 14px', border: '2px dashed var(--secondary)', borderRadius: '8px', backgroundColor: '#f8faff' }}>
+                    <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--secondary)', display: 'block', marginBottom: '6px' }}>
+                      Carregar NF + Boleto de uma vez
+                    </label>
+                    <input
+                      type="file"
+                      accept=".pdf,.xml"
+                      multiple
+                      className="form-control"
+                      style={{ padding: '4px', fontSize: '12px', cursor: 'pointer' }}
+                      onChange={e => handleCombinedUpload(e.target.files)}
+                    />
+                    {(parsingNF || parsingBoleto) && (
+                      <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--secondary)' }}>
+                        Lendo arquivos e identificando NF e boleto...
+                      </div>
+                    )}
+                    <p style={{ margin: '6px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Selecione os 2 arquivos juntos — o sistema detecta qual é a NF e qual é o boleto automaticamente.
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+                    {/* NF */}
+                    <div style={{ border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                        <span style={{ width: '9px', height: '9px', borderRadius: '50%', backgroundColor: p.nf_numero ? '#10b981' : '#ef4444', display: 'inline-block', flexShrink: 0 }} />
+                        Nota Fiscal
+                      </h4>
+                      <div className="form-group">
+                        <label style={{ fontSize: '12px' }}>Número</label>
+                        <input type="text" className="form-control" placeholder="Ex: 12345" value={formNF.numero} onChange={e => setFormNF(prev => ({ ...prev, numero: e.target.value }))} />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label style={{ fontSize: '12px' }}>Arquivo {parsingNF && <span style={{ color: 'var(--secondary)', fontWeight: 400 }}>— lendo PDF...</span>}</label>
+                        <input type="file" accept=".pdf,.xml" className="form-control" style={{ padding: '4px', fontSize: '12px', cursor: 'pointer' }} onChange={e => handleNFFileChange(e.target.files[0] || null)} />
+                      </div>
+                      {p.nf_arquivo_url && (
+                        <a href={p.nf_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--secondary)', display: 'block', marginTop: '8px', textDecoration: 'underline' }}>
+                          → Ver arquivo atual
+                        </a>
+                      )}
+                      {parseResultNF && !parseResultNF.erro && (
+                        <div style={{ marginTop: '10px', padding: '8px 10px', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', fontSize: '11px', lineHeight: 1.6 }}>
+                          {parseResultNF.numero   && <div><strong>NFS-e nº:</strong> {parseResultNF.numero}</div>}
+                          {parseResultNF.cliente  && <div><strong>Cliente:</strong> {parseResultNF.cliente}</div>}
+                          {parseResultNF.descricao && <div><strong>Serviço:</strong> {parseResultNF.descricao.substring(0, 150)}{parseResultNF.descricao.length > 150 ? '…' : ''}</div>}
+                          {parseResultNF.valor    && <div><strong>Valor:</strong> {parseResultNF.valor}</div>}
+                          {!parseResultNF.numero && !parseResultNF.cliente && !parseResultNF.descricao && (
+                            <div style={{ color: '#d97706' }}>Nenhum campo reconhecido.</div>
+                          )}
+                          {parseResultNF._debug && (
+                            <details style={{ marginTop: '6px' }}>
+                              <summary style={{ cursor: 'pointer', color: '#92400e', fontWeight: 600 }}>Ver texto extraído do PDF ({parseResultNF._debug.length} linhas)</summary>
+                              <pre style={{ marginTop: '6px', fontSize: '10px', color: '#374151', backgroundColor: '#fefce8', border: '1px solid #fde68a', borderRadius: '4px', padding: '8px', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto' }}>
+                                {parseResultNF._debug.map((l, i) => `${i + 1}: ${l}`).join('\n')}
+                              </pre>
+                            </details>
+                          )}
+                        </div>
+                      )}
+                      {parseResultNF?.erro && (
+                        <div style={{ marginTop: '8px', fontSize: '11px', color: '#dc2626' }}>Não foi possível ler o PDF: {parseResultNF.erro}</div>
+                      )}
+                    </div>
+
+                    {/* Boleto */}
+                    <div style={{ border: '1px solid var(--border)', borderRadius: '8px', padding: '14px' }}>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                        <span style={{ width: '9px', height: '9px', borderRadius: '50%', backgroundColor: p.boleto_arquivo_url ? '#10b981' : '#ef4444', display: 'inline-block', flexShrink: 0 }} />
+                        Boleto
+                      </h4>
+                      <div className="form-group">
+                        <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          Vencimento
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>
+                            previsto: {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                          </span>
+                          {formBoleto.vencimento && formBoleto.vencimento !== p.data_vencimento && (
+                            <span style={{ fontSize: '11px', color: '#d97706', fontWeight: 600 }}>⚠ diferente</span>
+                          )}
+                        </label>
+                        <input type="date" className="form-control" value={formBoleto.vencimento} onChange={e => setFormBoleto(prev => ({ ...prev, vencimento: e.target.value }))} />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label style={{ fontSize: '12px' }}>Arquivo {parsingBoleto && <span style={{ color: 'var(--secondary)', fontWeight: 400 }}>— lendo PDF...</span>}</label>
+                        <input type="file" accept=".pdf" className="form-control" style={{ padding: '4px', fontSize: '12px', cursor: 'pointer' }} onChange={e => handleBoletoFileChange(e.target.files[0] || null)} />
+                      </div>
+                      {p.boleto_arquivo_url && (
+                        <a href={p.boleto_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--secondary)', display: 'block', marginTop: '8px', textDecoration: 'underline' }}>
+                          → Ver arquivo atual
+                        </a>
+                      )}
+                      {parseResultBoleto && !parseResultBoleto.erro && (
+                        <div style={{ marginTop: '10px', padding: '8px 10px', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', fontSize: '11px', lineHeight: 1.6 }}>
+                          {parseResultBoleto.pagador && <div><strong>Pagador:</strong> {parseResultBoleto.pagador}</div>}
+                          {parseResultBoleto.numeroDocumento && <div><strong>Nº Documento:</strong> {parseResultBoleto.numeroDocumento}</div>}
+                          {parseResultBoleto.vencimento && <div><strong>Vencimento:</strong> {new Date(parseResultBoleto.vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</div>}
+                        </div>
+                      )}
+                      {parseResultBoleto?.erro && (
+                        <div style={{ marginTop: '8px', fontSize: '11px', color: '#dc2626' }}>Não foi possível ler o PDF: {parseResultBoleto.erro}</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Validação cruzada */}
+                  {validacao && (
+                    <div style={{ marginBottom: '16px', padding: '14px', backgroundColor: validacao.temAviso ? '#fffbeb' : '#f0fdf4', border: `1px solid ${validacao.temAviso ? '#fde68a' : '#bbf7d0'}`, borderRadius: '8px' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: validacao.temAviso ? '#92400e' : '#166534', marginBottom: '10px' }}>
+                        {validacao.temAviso ? '⚠️ Atenção: divergências encontradas' : '✅ Dados cruzados e conferidos'}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {validacao.itens.map((item, i) => (
+                          <div key={i} style={{ fontSize: '12px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                            <span style={{ flexShrink: 0, fontSize: '13px' }}>
+                              {item.ok === true ? '✅' : item.ok === false ? '❌' : '⚪'}
+                            </span>
+                            <div>
+                              <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>{item.label}</span>
+                              {item.ok !== true && (
+                                <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>
+                                  NF: <strong>{item.nf || '—'}</strong> · Ref: <strong>{item.boleto || '—'}</strong>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {validacao.temAviso && (
+                        <p style={{ margin: '10px 0 0 0', fontSize: '11px', color: '#92400e', fontStyle: 'italic' }}>
+                          Revise os dados acima antes de salvar. Você pode ajustar os campos manualmente ou avançar mesmo assim.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <button className="btn btn-primary" style={{ width: '100%', marginBottom: '20px' }} onClick={handleSave} disabled={saving}>
+                    {saving ? 'Salvando...' : validacao?.temAviso ? 'Avançar mesmo assim' : 'Salvar NF e Boleto'}
+                  </button>
+
+                  {!loadingModal && parcelasAtrasadas.length > 0 && (
+                    <div style={{ marginBottom: '16px', padding: '14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                        <span style={{ fontSize: '13px', fontWeight: 700, color: '#dc2626', flex: 1 }}>
+                          ⚠️ {parcelasAtrasadas.length} parcela(s) em atraso deste cliente
+                        </span>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#dc2626', whiteSpace: 'nowrap' }}>
+                          <input type="checkbox" checked={incluirCobranca} onChange={e => handleToggleCobranca(e.target.checked)} />
+                          Incluir na mensagem
+                        </label>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {parcelasAtrasadas.map(pa => (
+                          <div key={pa.id} style={{
+                            display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px',
+                            backgroundColor: incluirCobranca && cobrancaSelecionadas.includes(pa.id) ? '#fff1f2' : '#fff',
+                            border: '1px solid ' + (incluirCobranca && cobrancaSelecionadas.includes(pa.id) ? '#fecaca' : '#fee2e2'),
+                            borderRadius: '6px', opacity: incluirCobranca ? 1 : 0.65,
+                          }}>
+                            {incluirCobranca && (
+                              <input type="checkbox" checked={cobrancaSelecionadas.includes(pa.id)} onChange={() => toggleCobrancaItem(pa.id)} />
+                            )}
+                            <div style={{ flex: 1, fontSize: '12px' }}>
+                              <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>{pa.contratos?.titulo}</span>
+                              <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>ref. {getMesPrestacaoLong(pa)}</span>
+                            </div>
+                            <span style={{ fontWeight: 700, color: '#dc2626', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                              R$ {Number(pa.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                              venc. {new Date(pa.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      {incluirCobranca && (
+                        <p style={{ margin: '10px 0 0 0', fontSize: '11px', color: '#b91c1c', fontStyle: 'italic', lineHeight: 1.5 }}>
+                          A mensagem incluirá: aviso das parcelas selecionadas, validade do boleto anterior (30 dias), Pix e dados bancários do Banco Inter.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', margin: 0 }}>Prévia do E-mail</h4>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Para: {cliente?.email_cobranca || '—'}</span>
+                    </div>
+                    {loadingModal ? (
+                      <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Carregando prévia...</div>
+                    ) : previewCompleto ? (
+                      <div style={{ backgroundColor: '#f8fafc', border: '1px solid var(--border)', borderRadius: '8px', padding: '14px 16px', fontSize: '13px', color: 'var(--text-main)', whiteSpace: 'pre-wrap', lineHeight: 1.75, fontFamily: 'inherit' }}>
+                        {previewCompleto}
+                      </div>
+                    ) : (
+                      <div style={{ backgroundColor: '#f8fafc', border: '1px dashed var(--border)', borderRadius: '8px', padding: '14px 16px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', fontStyle: 'italic' }}>
+                        Nenhuma mensagem padrão cadastrada para este contrato.
+                        <br />
+                        <span style={{ fontSize: '11px' }}>Configure em Contratos → editar → Mensagem Padrão de Cobrança.</span>
+                      </div>
+                    )}
+                    <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        className="btn btn-primary"
+                        style={{ fontSize: '12px' }}
+                        disabled={enviandoEmail || !previewCompleto}
+                        onClick={handleEnviarEmailIndividual}
+                      >
+                        {enviandoEmail ? 'Enviando...' : '✉ Enviar por E-mail'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+
+          <div className="modal-footer">
+            <button className="btn btn-secondary" onClick={closeModal}>Fechar</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Modal E-mail Consolidado ─────────────────────────────────────────── */}
+      <div className={`modal-overlay ${emailModal.open ? 'active' : ''}`}>
+        <div className="modal" style={{ maxWidth: '700px' }}>
+          <div className="modal-header">
+            <h2>Compor E-mail — {emailModal.cliente?.apelido || emailModal.cliente?.nome}</h2>
+            <button className="close-modal" onClick={closeEmailModal}>&times;</button>
+          </div>
+
+          <div className="modal-body">
+            {loadingEmailModal ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>Carregando dados...</div>
+            ) : (
+              <>
+                {/* Para */}
+                <div style={{ marginBottom: '16px', padding: '10px 14px', backgroundColor: 'var(--bg-dark)', borderRadius: '8px', fontSize: '13px' }}>
+                  <strong>Para:</strong> {emailModal.cliente?.email_cobranca || <span style={{ color: '#ef4444' }}>sem e-mail cadastrado</span>}
+                </div>
+
+                {/* Seção 1: Parcelas do período */}
+                <div style={{ marginBottom: '16px' }}>
+                  <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', marginBottom: '10px' }}>
+                    Parcelas do período
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {emailModal.parcelas.map(p => {
+                      const hasDoc = !!(p.nf_numero || p.nf_arquivo_url);
+                      const included = emailParcelasIncluidas.includes(p.id);
+                      return (
+                        <div key={p.id} style={{
+                          display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px',
+                          backgroundColor: included ? '#f0f9ff' : '#f8fafc',
+                          border: '1px solid ' + (included ? '#bae6fd' : 'var(--border)'),
+                          borderRadius: '6px', opacity: hasDoc ? 1 : 0.6,
+                        }}>
+                          <input type="checkbox" checked={included} disabled={!hasDoc} onChange={() => toggleEmailParcela(p.id)} />
+                          <div style={{ flex: 1, fontSize: '12px' }}>
+                            <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>{p.contratos?.titulo}</span>
+                            <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>ref. {getMesPrestacaoLong(p)}</span>
+                          </div>
+                          <span style={{ fontWeight: 600, fontSize: '12px', whiteSpace: 'nowrap' }}>
+                            R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                            venc. {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                          </span>
+                          {!hasDoc && <span style={{ fontSize: '10px', color: '#ef4444', whiteSpace: 'nowrap' }}>sem NF</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Seção 2: Parcelas em atraso */}
+                {emailAtrasadas.length > 0 && (
+                  <div style={{ marginBottom: '16px', padding: '14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px' }}>
+                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: '#dc2626', marginBottom: '10px' }}>
+                      ⚠️ Parcelas em atraso ({emailAtrasadas.length})
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {emailAtrasadas.map(pa => {
+                        const included = emailAtrasadasIncluidas.includes(pa.id);
+                        return (
+                          <div key={pa.id} style={{
+                            display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px',
+                            backgroundColor: included ? '#fff1f2' : '#fff',
+                            border: '1px solid ' + (included ? '#fecaca' : '#fee2e2'),
+                            borderRadius: '6px',
+                          }}>
+                            <input type="checkbox" checked={included} onChange={() => toggleEmailAtrasada(pa.id)} />
+                            <div style={{ flex: 1, fontSize: '12px' }}>
+                              <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>{pa.contratos?.titulo}</span>
+                              <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>ref. {getMesPrestacaoLong(pa)}</span>
+                            </div>
+                            <span style={{ fontWeight: 700, color: '#dc2626', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                              R$ {Number(pa.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </span>
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                              venc. {new Date(pa.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Seção 3: Mensagem editável */}
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', margin: 0 }}>
+                      Mensagem
+                      {emailMensagemModificada && (
+                        <span style={{ marginLeft: '8px', fontSize: '11px', color: '#d97706', fontWeight: 400, fontStyle: 'italic' }}>editada manualmente</span>
+                      )}
+                    </h4>
+                    {emailMensagemModificada && (
+                      <button
+                        className="btn btn-secondary"
+                        style={{ fontSize: '11px', padding: '3px 10px' }}
+                        onClick={() => { setEmailMensagemModificada(false); setEmailMensagem(''); }}
+                      >
+                        ↺ Reconstruir
+                      </button>
+                    )}
+                  </div>
+                  <textarea
+                    className="form-control"
+                    rows={10}
+                    style={{ fontSize: '13px', lineHeight: 1.7, fontFamily: 'inherit', resize: 'vertical' }}
+                    value={emailMensagemModificada ? emailMensagem : mensagemAutoGerada}
+                    onChange={e => { setEmailMensagem(e.target.value); setEmailMensagemModificada(true); }}
+                    placeholder="Selecione as parcelas acima para gerar a mensagem automaticamente."
+                  />
+                </div>
+
+                {/* Seção 4: Anexos */}
+                {emailAnexos.length > 0 && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', marginBottom: '8px' }}>
+                      Anexos ({emailAnexos.length})
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                      {emailAnexos.map((anexo, i) => (
+                        <a key={i} href={anexo.url} target="_blank" rel="noopener noreferrer"
+                          style={{ fontSize: '12px', color: 'var(--secondary)', display: 'flex', alignItems: 'center', gap: '6px', textDecoration: 'underline' }}>
+                          📎 {anexo.label.trim()}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '8px', borderTop: '1px solid var(--border)' }}>
+                  <button
+                    className="btn btn-primary"
+                    disabled={enviandoEmail || !mensagemAutoGerada.trim()}
+                    onClick={handleEnviarEmailConsolidado}
+                  >
+                    {enviandoEmail ? 'Enviando...' : '✉ Enviar por E-mail'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="modal-footer">
+            <button className="btn btn-secondary" onClick={closeEmailModal}>Fechar</button>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  );
+}
