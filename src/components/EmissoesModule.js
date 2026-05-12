@@ -34,6 +34,12 @@ export default function EmissoesModule() {
   const [incluirCobranca, setIncluirCobranca] = useState(false);
   const [cobrancaSelecionadas, setCobrancaSelecionadas] = useState([]);
 
+  // Bulk upload state
+  const [bulkModal, setBulkModal] = useState(false);
+  const [bulkProcessando, setBulkProcessando] = useState(false);
+  const [bulkResultados, setBulkResultados] = useState([]);
+  const [bulkSalvando, setBulkSalvando] = useState(false);
+
   // Consolidated email modal state
   const [emailModal, setEmailModal] = useState({ open: false, cliente: null, parcelas: [] });
   const [emailParcelasIncluidas, setEmailParcelasIncluidas] = useState([]);
@@ -44,6 +50,7 @@ export default function EmissoesModule() {
   const [emailMensagemModificada, setEmailMensagemModificada] = useState(false);
   const [loadingEmailModal, setLoadingEmailModal] = useState(false);
   const [enviandoEmail, setEnviandoEmail] = useState(false);
+  const [importando, setImportando] = useState(false);
 
   useEffect(() => {
     fetch('/api/emissoes/setup', { method: 'POST' });
@@ -265,6 +272,132 @@ export default function EmissoesModule() {
     const res = await fetch('/api/emissoes/parse', { method: 'POST', body: fd });
     return res.json();
   };
+
+  // ─── Upload em Lote ───────────────────────────────────────────────────────
+
+  const openBulkModal = () => { setBulkModal(true); setBulkResultados([]); };
+
+  const handleExportarParcelas = () => {
+    window.open('/api/emissoes/export-parcelas', '_blank');
+  };
+
+  const handleImportarParcelas = async (file) => {
+    if (!file) return;
+    setImportando(true);
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/emissoes/import-parcelas', { method: 'POST', body: fd });
+    const json = await res.json();
+    setImportando(false);
+    if (json.error) { alert('Erro: ' + json.error); return; }
+    alert(`✅ ${json.atualizadas} parcela(s) atualizada(s)!${json.erros?.length ? '\n\nErros:\n' + json.erros.join('\n') : ''}`);
+    fetchParcelas();
+  };
+
+  const handleBulkFileChange = async (files) => {
+    if (!files || files.length === 0) return;
+    setBulkProcessando(true);
+    setBulkResultados([]);
+
+    const { data: todasParcelas } = await supabase
+      .from('parcelas')
+      .select('*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, clientes(id, nome, apelido, cnpj))')
+      .is('nf_numero', null)
+      .not('status', 'eq', 'Paga');
+
+    const resultados = [];
+    for (const file of Array.from(files)) {
+      const parsed = await parseFile(file, 'nf');
+      const cnpjDigits = (parsed.cnpj || '').replace(/\D/g, '');
+
+      let parcelasDoCliente = [];
+      if (cnpjDigits.length >= 8) {
+        parcelasDoCliente = (todasParcelas || []).filter(p => {
+          const pCnpj = (p.contratos?.clientes?.cnpj || '').replace(/\D/g, '');
+          return pCnpj && pCnpj.startsWith(cnpjDigits.slice(0, 8));
+        });
+      }
+      // fallback: nome do cliente
+      if (parcelasDoCliente.length === 0 && parsed.cliente) {
+        const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const nomeNF = norm(parsed.cliente);
+        parcelasDoCliente = (todasParcelas || []).filter(p => {
+          const pNome = norm(p.contratos?.clientes?.nome || '');
+          return pNome.length > 4 && (pNome.includes(nomeNF.slice(0, 8)) || nomeNF.includes(pNome.slice(0, 8)));
+        });
+      }
+
+      const clienteMatch = parcelasDoCliente[0]?.contratos?.clientes || null;
+
+      // Tenta casar por valor
+      const parsedValor = parseFloat((parsed.valor || '').replace(/\./g, '').replace(',', '.'));
+      let parcelaSugerida = parsedValor > 0
+        ? parcelasDoCliente.find(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
+        : null;
+      if (!parcelaSugerida && parcelasDoCliente.length === 1) parcelaSugerida = parcelasDoCliente[0];
+
+      resultados.push({
+        file,
+        filename: file.name,
+        parsed,
+        clienteMatch,
+        parcelasDoCliente,
+        parcelaSelecionada: parcelaSugerida || null,
+        status: !clienteMatch ? 'nao_encontrado' : !parcelaSugerida ? 'confirmar' : 'pronto',
+        salvo: false,
+        erro: null,
+      });
+    }
+    setBulkResultados(resultados);
+    setBulkProcessando(false);
+  };
+
+  const handleBulkParcelaChange = (index, parcelaId) => {
+    setBulkResultados(prev => prev.map((r, i) => {
+      if (i !== index) return r;
+      const parcela = r.parcelasDoCliente.find(p => p.id === parcelaId) || null;
+      return { ...r, parcelaSelecionada: parcela, status: parcela ? 'pronto' : 'confirmar' };
+    }));
+  };
+
+  const handleBulkSalvar = async () => {
+    setBulkSalvando(true);
+    const prontos = bulkResultados.filter(r => r.status === 'pronto' && r.parcelaSelecionada);
+    const novosResultados = [...bulkResultados];
+
+    for (const item of prontos) {
+      const idx = novosResultados.indexOf(item);
+      try {
+        const fd = new FormData();
+        fd.append('file', item.file);
+        fd.append('parcelaId', item.parcelaSelecionada.id);
+        fd.append('tipo', 'nf');
+        const res = await fetch('/api/emissoes/upload', { method: 'POST', body: fd });
+        const json = await res.json();
+        if (json.error) throw new Error(json.error);
+
+        const novoStatus = ['NF Emitida', 'Paga'].includes(item.parcelaSelecionada.status)
+          ? item.parcelaSelecionada.status : 'NF Emitida';
+        await supabase.from('parcelas').update({
+          nf_numero: item.parsed.numero || null,
+          nf_arquivo_url: json.url,
+          status: novoStatus,
+        }).eq('id', item.parcelaSelecionada.id);
+
+        if (item.clienteMatch?.id) {
+          await salvarEnderecoCliente(item.parsed, { contratos: { cliente_id: item.clienteMatch.id } });
+        }
+        novosResultados[idx] = { ...item, salvo: true, status: 'salvo' };
+      } catch (e) {
+        novosResultados[idx] = { ...item, erro: e.message, status: 'erro' };
+      }
+      setBulkResultados([...novosResultados]);
+    }
+    setBulkSalvando(false);
+    fetchParcelas();
+  };
+
+  // ─── Email ────────────────────────────────────────────────────────────────
 
   const salvarEnderecoCliente = async (result, parcela) => {
     const clienteId = parcela?.contratos?.cliente_id;
@@ -665,6 +798,16 @@ export default function EmissoesModule() {
       {/* Header */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
         <h2 style={{ marginRight: 'auto', color: 'var(--secondary)', fontSize: '18px' }}>Controle de Emissões</h2>
+        <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={handleExportarParcelas}>
+          ⬇ Exportar Pendentes
+        </button>
+        <label className="btn btn-secondary" style={{ fontSize: '13px', cursor: 'pointer', marginBottom: 0 }}>
+          {importando ? 'Importando...' : '⬆ Importar Preenchido'}
+          <input type="file" accept=".csv,.xlsx" style={{ display: 'none' }} onChange={e => { handleImportarParcelas(e.target.files[0]); e.target.value = ''; }} disabled={importando} />
+        </label>
+        <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={openBulkModal}>
+          ⬆ Upload em Lote
+        </button>
         {countSemNF > 0 && (
           <span style={{ backgroundColor: '#fef2f2', color: '#ef4444', border: '1px solid #fecaca', borderRadius: '12px', padding: '2px 12px', fontSize: '12px', fontWeight: 600 }}>
             {countSemNF} sem NF
@@ -1111,6 +1254,130 @@ export default function EmissoesModule() {
 
           <div className="modal-footer">
             <button className="btn btn-secondary" onClick={closeModal}>Fechar</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Modal Upload em Lote ─────────────────────────────────────────────── */}
+      <div className={`modal-overlay ${bulkModal ? 'active' : ''}`}>
+        <div className="modal" style={{ maxWidth: '780px' }}>
+          <div className="modal-header">
+            <h2>Upload de NFs em Lote</h2>
+            <button className="close-modal" onClick={() => setBulkModal(false)}>&times;</button>
+          </div>
+          <div className="modal-body">
+            {/* Seletor de arquivos */}
+            <div style={{ marginBottom: '20px', padding: '16px', border: '2px dashed var(--secondary)', borderRadius: '8px', backgroundColor: '#f8faff' }}>
+              <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--secondary)', display: 'block', marginBottom: '8px' }}>
+                Selecione todas as NFs de uma vez
+              </label>
+              <input
+                type="file"
+                accept=".pdf"
+                multiple
+                className="form-control"
+                style={{ padding: '4px', fontSize: '12px', cursor: 'pointer' }}
+                onChange={e => handleBulkFileChange(e.target.files)}
+                disabled={bulkProcessando || bulkSalvando}
+              />
+              <p style={{ margin: '6px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
+                O sistema lê o CNPJ de cada NF, localiza o cliente e sugere a parcela correspondente pelo valor.
+              </p>
+            </div>
+
+            {/* Processando */}
+            {bulkProcessando && (
+              <div style={{ textAlign: 'center', padding: '24px', color: 'var(--secondary)', fontSize: '13px' }}>
+                Lendo arquivos e cruzando com o cadastro...
+              </div>
+            )}
+
+            {/* Tabela de resultados */}
+            {bulkResultados.length > 0 && !bulkProcessando && (
+              <>
+                <div style={{ marginBottom: '10px', display: 'flex', gap: '12px', fontSize: '12px' }}>
+                  <span style={{ color: '#10b981' }}>✅ {bulkResultados.filter(r => r.status === 'pronto').length} prontos</span>
+                  <span style={{ color: '#d97706' }}>⚠️ {bulkResultados.filter(r => r.status === 'confirmar').length} precisam de confirmação</span>
+                  <span style={{ color: '#ef4444' }}>❌ {bulkResultados.filter(r => r.status === 'nao_encontrado').length} não localizados</span>
+                  {bulkResultados.filter(r => r.status === 'salvo').length > 0 && (
+                    <span style={{ color: '#10b981', fontWeight: 700 }}>💾 {bulkResultados.filter(r => r.status === 'salvo').length} salvos</span>
+                  )}
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: 'var(--bg-dark)', borderBottom: '2px solid var(--border)' }}>
+                        <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600 }}>Arquivo</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600 }}>Cliente</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600 }}>Parcela</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>NF Nº</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>Valor</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkResultados.map((r, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid var(--border)', backgroundColor: r.status === 'salvo' ? '#f0fdf4' : r.status === 'erro' ? '#fef2f2' : 'transparent' }}>
+                          <td style={{ padding: '8px 10px', color: 'var(--text-muted)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {r.filename}
+                          </td>
+                          <td style={{ padding: '8px 10px', fontWeight: r.clienteMatch ? 600 : 400, color: r.clienteMatch ? 'var(--secondary)' : '#ef4444' }}>
+                            {r.clienteMatch ? (r.clienteMatch.apelido || r.clienteMatch.nome) : 'Não encontrado'}
+                          </td>
+                          <td style={{ padding: '8px 10px', minWidth: '200px' }}>
+                            {r.status === 'salvo' ? (
+                              <span style={{ color: '#10b981' }}>{r.parcelaSelecionada?.contratos?.titulo} — {getMesPrestacao(r.parcelaSelecionada)}</span>
+                            ) : r.parcelasDoCliente.length === 0 ? (
+                              <span style={{ color: '#94a3b8', fontSize: '11px' }}>—</span>
+                            ) : (
+                              <select
+                                className="form-control"
+                                style={{ fontSize: '11px', padding: '3px 6px' }}
+                                value={r.parcelaSelecionada?.id || ''}
+                                onChange={e => handleBulkParcelaChange(i, e.target.value)}
+                                disabled={bulkSalvando}
+                              >
+                                <option value="">Selecionar parcela...</option>
+                                {r.parcelasDoCliente.map(p => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.contratos?.titulo} — {getMesPrestacao(p)} — R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </td>
+                          <td style={{ padding: '8px 10px', textAlign: 'center', fontFamily: 'monospace' }}>
+                            {r.parsed.numero || '—'}
+                          </td>
+                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            {r.parsed.valor ? `R$ ${r.parsed.valor}` : '—'}
+                          </td>
+                          <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                            {r.status === 'pronto'        && <span style={{ color: '#10b981', fontWeight: 700 }}>✅</span>}
+                            {r.status === 'confirmar'     && <span style={{ color: '#d97706', fontWeight: 700 }}>⚠️</span>}
+                            {r.status === 'nao_encontrado'&& <span style={{ color: '#ef4444', fontWeight: 700 }}>❌</span>}
+                            {r.status === 'salvo'         && <span style={{ color: '#10b981', fontWeight: 700 }}>💾</span>}
+                            {r.status === 'erro'          && <span style={{ color: '#ef4444', fontSize: '11px' }}>{r.erro}</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-secondary" onClick={() => setBulkModal(false)}>Fechar</button>
+            {bulkResultados.filter(r => r.status === 'pronto').length > 0 && (
+              <button
+                className="btn btn-primary"
+                onClick={handleBulkSalvar}
+                disabled={bulkSalvando}
+              >
+                {bulkSalvando ? 'Salvando...' : `Salvar ${bulkResultados.filter(r => r.status === 'pronto').length} NF(s)`}
+              </button>
+            )}
           </div>
         </div>
       </div>

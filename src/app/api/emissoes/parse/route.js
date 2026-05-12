@@ -237,6 +237,13 @@ function extractNFTomador(lines) {
     }
   }
 
+  // CNPJ do tomador (label "CPF/CNPJ" dentro da seção TOMADOR)
+  const cnpjRes = nextLineAfter(lines, /^CPF\s*[\/\\]?\s*CNPJ$/i, tomadorIdx);
+  if (cnpjRes?.value) {
+    const digits = cnpjRes.value.replace(/\D/g, '');
+    if (digits.length === 14 || digits.length === 11) result.cnpj = digits;
+  }
+
   // Telefone
   const telRes = nextLineAfter(lines, /^telefone$|^fone$/i, tomadorIdx);
   if (telRes?.value && telRes.value.replace(/\D/g, '').length >= 8) result.telefone = telRes.value;
