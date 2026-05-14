@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
 
 const MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -40,6 +40,12 @@ export default function EmissoesModule() {
   const [bulkResultados, setBulkResultados] = useState([]);
   const [bulkSalvando, setBulkSalvando] = useState(false);
   const [bulkTodasParcelas, setBulkTodasParcelas] = useState([]);
+
+  // Ajustar lançamentos state
+  const [ajustarModal, setAjustarModal] = useState(false);
+  const [ajustarParcelas, setAjustarParcelas] = useState([]);
+  const [ajustarDisponiveis, setAjustarDisponiveis] = useState([]);
+  const [ajustarLoading, setAjustarLoading] = useState(false);
 
   // Consolidated email modal state
   const [emailModal, setEmailModal] = useState({ open: false, cliente: null, parcelas: [] });
@@ -419,6 +425,49 @@ export default function EmissoesModule() {
       setBulkResultados([...novosResultados]);
     }
     setBulkSalvando(false);
+    fetchParcelas();
+  };
+
+  // ─── Ajustar Lançamentos ──────────────────────────────────────────────────
+
+  const openAjustarModal = async () => {
+    setAjustarModal(true);
+    setAjustarLoading(true);
+    const sel = 'id, valor, data_vencimento, data_original, status, nf_numero, nf_arquivo_url, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, clientes(id, nome, apelido))';
+    const [{ data: lancadas }, { data: disponiveis }] = await Promise.all([
+      supabase.from('parcelas').select(sel).not('nf_numero', 'is', null).order('data_vencimento', { ascending: false }).limit(150),
+      supabase.from('parcelas').select(sel).is('nf_numero', null).not('status', 'eq', 'Paga'),
+    ]);
+    setAjustarDisponiveis(disponiveis || []);
+    setAjustarParcelas((lancadas || []).map(p => ({ ...p, moverAtivo: false, moverSelecionada: '', salvando: false })));
+    setAjustarLoading(false);
+  };
+
+  const handleAjustarAtivarMover = (idx) => {
+    setAjustarParcelas(prev => prev.map((r, i) => {
+      if (i !== idx) return { ...r, moverAtivo: false };
+      const clienteId = r.contratos?.clientes?.id;
+      const opcoes = ajustarDisponiveis.filter(d => d.contratos?.clientes?.id === clienteId);
+      return { ...r, moverAtivo: !r.moverAtivo, moverSelecionada: '', _opcoes: opcoes };
+    }));
+  };
+
+  const handleAjustarConfirmarMover = async (idx) => {
+    const row = ajustarParcelas[idx];
+    if (!row.moverSelecionada) return;
+    setAjustarParcelas(prev => prev.map((r, i) => i === idx ? { ...r, salvando: true } : r));
+    await supabase.from('parcelas').update({ nf_numero: row.nf_numero, nf_arquivo_url: row.nf_arquivo_url, status: 'NF Emitida' }).eq('id', row.moverSelecionada);
+    await supabase.from('parcelas').update({ nf_numero: null, nf_arquivo_url: null, status: 'Pendente' }).eq('id', row.id);
+    setAjustarParcelas(prev => prev.filter((_, i) => i !== idx));
+    setAjustarDisponiveis(prev => prev.filter(d => d.id !== row.moverSelecionada));
+    fetchParcelas();
+  };
+
+  const handleAjustarRemover = async (idx) => {
+    const row = ajustarParcelas[idx];
+    setAjustarParcelas(prev => prev.map((r, i) => i === idx ? { ...r, salvando: true } : r));
+    await supabase.from('parcelas').update({ nf_numero: null, nf_arquivo_url: null, status: 'Pendente' }).eq('id', row.id);
+    setAjustarParcelas(prev => prev.filter((_, i) => i !== idx));
     fetchParcelas();
   };
 
@@ -832,6 +881,9 @@ export default function EmissoesModule() {
         </label>
         <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={openBulkModal}>
           ⬆ Upload em Lote
+        </button>
+        <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={openAjustarModal}>
+          ✏️ Ajustar Lançamentos
         </button>
         {countSemNF > 0 && (
           <span style={{ backgroundColor: '#fef2f2', color: '#ef4444', border: '1px solid #fecaca', borderRadius: '12px', padding: '2px 12px', fontSize: '12px', fontWeight: 600 }}>
@@ -1431,6 +1483,114 @@ export default function EmissoesModule() {
                 {bulkSalvando ? 'Salvando...' : `Salvar ${bulkResultados.filter(r => r.status === 'pronto').length} NF(s)`}
               </button>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Modal Ajustar Lançamentos ────────────────────────────────────────── */}
+      <div className={`modal-overlay ${ajustarModal ? 'active' : ''}`}>
+        <div className="modal" style={{ width: '92vw', maxWidth: '1100px' }}>
+          <div className="modal-header">
+            <h2>Ajustar Lançamentos</h2>
+            <button className="close-modal" onClick={() => setAjustarModal(false)}>&times;</button>
+          </div>
+          <div className="modal-body">
+            {ajustarLoading ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Carregando...</div>
+            ) : ajustarParcelas.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhum lançamento encontrado.</div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: 'var(--bg-dark)', borderBottom: '2px solid var(--border)' }}>
+                      <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>NF Nº</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600 }}>Cliente</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600 }}>Parcela</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>Competência</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>Valor</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>Status</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ajustarParcelas.map((row, i) => (
+                      <Fragment key={row.id}>
+                        <tr style={{ borderBottom: row.moverAtivo ? 'none' : '1px solid var(--border)', opacity: row.salvando ? 0.5 : 1 }}>
+                          <td style={{ padding: '8px 10px', textAlign: 'center', fontFamily: 'monospace', fontWeight: 600 }}>{row.nf_numero || '—'}</td>
+                          <td style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--secondary)' }}>{row.contratos?.clientes?.apelido || row.contratos?.clientes?.nome || '—'}</td>
+                          <td style={{ padding: '8px 10px' }}>{row.contratos?.titulo || '—'}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'center' }}>{getMesPrestacao(row)}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>R$ {Number(row.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                          <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                            <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '10px', background: '#f0fdf4', color: '#10b981', border: '1px solid #bbf7d0' }}>{row.status}</span>
+                          </td>
+                          <td style={{ padding: '6px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                            <button
+                              onClick={() => handleAjustarAtivarMover(i)}
+                              disabled={row.salvando}
+                              style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '6px', border: '1px solid var(--secondary)', background: row.moverAtivo ? 'var(--secondary)' : 'transparent', color: row.moverAtivo ? '#fff' : 'var(--secondary)', cursor: 'pointer', marginRight: '6px' }}
+                            >
+                              ↔ Mover
+                            </button>
+                            <button
+                              onClick={() => handleAjustarRemover(i)}
+                              disabled={row.salvando}
+                              style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '6px', border: '1px solid #ef4444', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
+                            >
+                              × Remover
+                            </button>
+                          </td>
+                        </tr>
+                        {row.moverAtivo && (
+                          <tr style={{ borderBottom: '1px solid var(--border)', backgroundColor: '#f8faff' }}>
+                            <td colSpan={7} style={{ padding: '8px 16px 12px' }}>
+                              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Mover NF {row.nf_numero} para:</span>
+                                {row._opcoes?.length === 0 ? (
+                                  <span style={{ fontSize: '12px', color: '#ef4444' }}>Nenhuma parcela disponível para este cliente</span>
+                                ) : (
+                                  <>
+                                    <select
+                                      className="form-control"
+                                      style={{ fontSize: '12px', flex: 1, maxWidth: '480px' }}
+                                      value={row.moverSelecionada}
+                                      onChange={e => setAjustarParcelas(prev => prev.map((r, j) => j === i ? { ...r, moverSelecionada: e.target.value } : r))}
+                                    >
+                                      <option value="">Selecionar parcela destino...</option>
+                                      {(row._opcoes || []).map(p => (
+                                        <option key={p.id} value={p.id}>
+                                          {p.contratos?.titulo} — {getMesPrestacao(p)} — R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      onClick={() => handleAjustarConfirmarMover(i)}
+                                      disabled={!row.moverSelecionada || row.salvando}
+                                      className="btn btn-primary"
+                                      style={{ fontSize: '12px', padding: '5px 14px' }}
+                                    >
+                                      Confirmar
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  onClick={() => setAjustarParcelas(prev => prev.map((r, j) => j === i ? { ...r, moverAtivo: false } : r))}
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '16px' }}
+                                >×</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-secondary" onClick={() => setAjustarModal(false)}>Fechar</button>
           </div>
         </div>
       </div>
