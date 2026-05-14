@@ -39,6 +39,7 @@ export default function EmissoesModule() {
   const [bulkProcessando, setBulkProcessando] = useState(false);
   const [bulkResultados, setBulkResultados] = useState([]);
   const [bulkSalvando, setBulkSalvando] = useState(false);
+  const [bulkTodasParcelas, setBulkTodasParcelas] = useState([]);
 
   // Consolidated email modal state
   const [emailModal, setEmailModal] = useState({ open: false, cliente: null, parcelas: [] });
@@ -305,6 +306,7 @@ export default function EmissoesModule() {
       .is('nf_numero', null)
       .not('status', 'eq', 'Paga');
 
+    setBulkTodasParcelas(todasParcelas || []);
     const resultados = [];
     for (const file of Array.from(files)) {
       const parsed = await parseFile(file, 'nf');
@@ -358,6 +360,29 @@ export default function EmissoesModule() {
       const parcela = r.parcelasDoCliente.find(p => p.id === parcelaId) || null;
       return { ...r, parcelaSelecionada: parcela, status: parcela ? 'pronto' : 'confirmar' };
     }));
+  };
+
+  const handleBulkClienteChange = (index, clienteId) => {
+    setBulkResultados(prev => prev.map((r, i) => {
+      if (i !== index) return r;
+      const parcelasDoCliente = bulkTodasParcelas.filter(p => p.contratos?.clientes?.id === clienteId);
+      const clienteMatch = parcelasDoCliente[0]?.contratos?.clientes || null;
+      const parsedValor = parseFloat((r.parsed.valor || '').replace(/\./g, '').replace(',', '.'));
+      const parcelaSugerida = parsedValor > 0
+        ? parcelasDoCliente.find(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
+        : null;
+      return {
+        ...r,
+        clienteMatch,
+        parcelasDoCliente,
+        parcelaSelecionada: parcelaSugerida || (parcelasDoCliente.length === 1 ? parcelasDoCliente[0] : null),
+        status: !clienteMatch ? 'nao_encontrado' : (parcelaSugerida || parcelasDoCliente.length === 1) ? 'pronto' : 'confirmar',
+      };
+    }));
+  };
+
+  const handleBulkRemove = (index) => {
+    setBulkResultados(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleBulkSalvar = async () => {
@@ -1260,7 +1285,7 @@ export default function EmissoesModule() {
 
       {/* ── Modal Upload em Lote ─────────────────────────────────────────────── */}
       <div className={`modal-overlay ${bulkModal ? 'active' : ''}`}>
-        <div className="modal" style={{ maxWidth: '780px' }}>
+        <div className="modal" style={{ maxWidth: '1040px' }}>
           <div className="modal-header">
             <h2>Upload de NFs em Lote</h2>
             <button className="close-modal" onClick={() => setBulkModal(false)}>&times;</button>
@@ -1313,6 +1338,7 @@ export default function EmissoesModule() {
                         <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>NF Nº</th>
                         <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>Valor</th>
                         <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>Status</th>
+                        <th style={{ padding: '8px 6px', width: '32px' }}></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1321,8 +1347,25 @@ export default function EmissoesModule() {
                           <td style={{ padding: '8px 10px', color: 'var(--text-muted)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {r.filename}
                           </td>
-                          <td style={{ padding: '8px 10px', fontWeight: r.clienteMatch ? 600 : 400, color: r.clienteMatch ? 'var(--secondary)' : '#ef4444' }}>
-                            {r.clienteMatch ? (r.clienteMatch.apelido || r.clienteMatch.nome) : 'Não encontrado'}
+                          <td style={{ padding: '6px 10px', minWidth: '160px' }}>
+                            {r.status === 'salvo' ? (
+                              <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>{r.clienteMatch?.apelido || r.clienteMatch?.nome}</span>
+                            ) : (
+                              <select
+                                className="form-control"
+                                style={{ fontSize: '11px', padding: '3px 6px', fontWeight: r.clienteMatch ? 600 : 400, color: r.clienteMatch ? 'var(--secondary)' : '#ef4444', borderColor: r.clienteMatch ? undefined : '#ef4444' }}
+                                value={r.clienteMatch?.id || ''}
+                                onChange={e => handleBulkClienteChange(i, e.target.value)}
+                                disabled={bulkSalvando}
+                              >
+                                <option value="">— Selecionar cliente —</option>
+                                {[...new Map(bulkTodasParcelas.map(p => [p.contratos?.clientes?.id, p.contratos?.clientes]).filter(([id]) => id)).values()]
+                                  .sort((a, b) => (a.apelido || a.nome).localeCompare(b.apelido || b.nome))
+                                  .map(c => (
+                                    <option key={c.id} value={c.id}>{c.apelido || c.nome}</option>
+                                  ))}
+                              </select>
+                            )}
                           </td>
                           <td style={{ padding: '8px 10px', minWidth: '200px' }}>
                             {r.status === 'salvo' ? (
@@ -1358,6 +1401,16 @@ export default function EmissoesModule() {
                             {r.status === 'nao_encontrado'&& <span style={{ color: '#ef4444', fontWeight: 700 }}>❌</span>}
                             {r.status === 'salvo'         && <span style={{ color: '#10b981', fontWeight: 700 }}>💾</span>}
                             {r.status === 'erro'          && <span style={{ color: '#ef4444', fontSize: '11px' }}>{r.erro}</span>}
+                          </td>
+                          <td style={{ padding: '4px 6px', textAlign: 'center' }}>
+                            {r.status !== 'salvo' && (
+                              <button
+                                onClick={() => handleBulkRemove(i)}
+                                disabled={bulkSalvando}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '14px', lineHeight: 1, padding: '2px 4px' }}
+                                title="Remover"
+                              >×</button>
+                            )}
                           </td>
                         </tr>
                       ))}
