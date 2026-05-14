@@ -1285,7 +1285,7 @@ export default function EmissoesModule() {
 
       {/* ── Modal Upload em Lote ─────────────────────────────────────────────── */}
       <div className={`modal-overlay ${bulkModal ? 'active' : ''}`}>
-        <div className="modal" style={{ maxWidth: '1040px' }}>
+        <div className="modal" style={{ width: '92vw', maxWidth: '1100px' }}>
           <div className="modal-header">
             <h2>Upload de NFs em Lote</h2>
             <button className="close-modal" onClick={() => setBulkModal(false)}>&times;</button>
