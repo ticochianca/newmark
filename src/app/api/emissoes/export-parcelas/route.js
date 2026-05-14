@@ -24,8 +24,9 @@ export async function GET() {
   const { data, error } = await supabaseAdmin
     .from('parcelas')
     .select('id, valor, data_vencimento, data_original, status, nf_numero, data_pagamento, contratos(titulo, cobranca_mesmo_mes, clientes(nome, apelido))')
+    .gte('data_vencimento', '2024-01-01')
     .lte('data_vencimento', '2026-04-30')
-    .or('status.neq.Paga,nf_numero.is.null')
+    .neq('status', 'Paga')
     .order('data_vencimento');
 
   if (error) return new Response('Erro: ' + error.message, { status: 500 });
@@ -45,7 +46,7 @@ export async function GET() {
       csvQuote(nome),
       csvQuote(p.contratos?.titulo || ''),
       csvQuote(competencia(p)),
-      Number(p.valor).toFixed(2).replace('.', ','),
+      Number(p.valor).toFixed(2),
       venc,
       p.status,
       csvQuote(p.nf_numero || ''),
