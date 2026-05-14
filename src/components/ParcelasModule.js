@@ -353,6 +353,15 @@ export default function ParcelasModule() {
     }
   };
 
+  const handleDeleteParcela = async () => {
+    const { realId, parcela } = modalState;
+    const label = parcela?.contratos?.titulo || 'esta parcela';
+    if (!window.confirm(`Excluir ${label}? Esta ação não pode ser desfeita.`)) return;
+    const { error } = await supabase.from('parcelas').delete().eq('id', realId);
+    if (error) alert('Erro: ' + error.message);
+    else { setModalState({ isOpen: false, parcela: null }); fetchParcelas(); }
+  };
+
   const getStatusDisplay = (p) => {
     if (p.status === 'Paga' || p.status === 'Reprogramada' || p.status === 'Congelada') return p.status;
 
@@ -928,6 +937,13 @@ export default function ParcelasModule() {
           </div>
           <div className="modal-footer">
             <button className="btn btn-secondary" onClick={() => setModalState({isOpen: false, parcela: null})}>Cancelar</button>
+            <button
+              type="button"
+              onClick={handleDeleteParcela}
+              style={{ marginRight: 'auto', background: 'none', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '6px', padding: '6px 14px', fontSize: '13px', cursor: 'pointer' }}
+            >
+              Excluir parcela
+            </button>
             <button type="submit" form="form-action" className="btn btn-primary">
               {modalState.mode === 'emitir_pontual' ? 'Emitir Parcela' : modalState.mode === 'ajustar_valor' ? 'Salvar Valor' : 'Confirmar'}
             </button>
