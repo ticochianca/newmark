@@ -37,9 +37,9 @@ export async function POST(req) {
       throw error;
     }
 
-    // Read the template
-    const templatePath = path.join(process.cwd(), 'public', 'Template_Inter.xlsx');
-    const wb = xlsx.readFile(templatePath);
+    // Read the template from Base64 to avoid path issues on Vercel
+    const { templateInterBase64 } = require('@/lib/templateInterBase64');
+    const wb = xlsx.read(Buffer.from(templateInterBase64, 'base64'), { type: 'buffer' });
     const sheetName = 'Cobrança Simples'; // As we saw from previous logs
     const sheet = wb.Sheets[sheetName];
     
