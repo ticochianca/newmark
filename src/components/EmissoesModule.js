@@ -15,7 +15,6 @@ export default function EmissoesModule() {
   const [filtroStatus, setFiltroStatus] = useState('pendentes');
   const [parcelas, setParcelas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [visao, setVisao] = useState('parcelas'); // 'parcelas' | 'cliente'
 
   // Individual modal state
   const [modal, setModal] = useState({ open: false, parcela: null });
@@ -36,6 +35,7 @@ export default function EmissoesModule() {
 
   // Bulk upload state
   const [bulkModal, setBulkModal] = useState(false);
+  const [bulkType, setBulkType] = useState('nf');
   const [bulkProcessando, setBulkProcessando] = useState(false);
   const [bulkResultados, setBulkResultados] = useState([]);
   const [bulkSalvando, setBulkSalvando] = useState(false);
@@ -73,7 +73,7 @@ export default function EmissoesModule() {
     const start = `${ano}-${mesStr}-01`;
     const daysInMonth = new Date(ano, mes, 0).getDate();
     const end = `${ano}-${mesStr}-${String(daysInMonth).padStart(2, '0')}`;
-    const sel = '*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, clientes(id, nome, apelido, email_cobranca))';
+    const sel = '*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, congelado, congelado_desde, clientes(id, nome, apelido, email_cobranca, cnpj))';
 
     const [{ data: monthData, error: err1 }, { data: overdueData, error: err2 }] = await Promise.all([
       supabase.from('parcelas').select(sel)
@@ -132,6 +132,26 @@ export default function EmissoesModule() {
   };
 
   // Consolidated email: uses only stored DB values
+  const isParcelaCongelada = (p) => {
+    if (!p.contratos?.congelado) return false;
+    const desde = p.contratos?.congelado_desde;
+    if (!desde) return true;
+    
+    // Calcula a competência da parcela (usando a mesma lógica de getMesPrestacao)
+    const isMesmoMes = p.contratos?.cobranca_mesmo_mes;
+    const dataBase = p.data_original || p.data_vencimento;
+    if (!dataBase) return false;
+    const dComp = new Date(dataBase + 'T12:00:00');
+    if (!isMesmoMes) dComp.setUTCMonth(dComp.getUTCMonth() - 1);
+    
+    const dDesde = new Date(desde + 'T12:00:00');
+    // Considera apenas mês/ano para o congelamento
+    const compKey = dComp.getUTCFullYear() * 100 + dComp.getUTCMonth();
+    const desdeKey = dDesde.getUTCFullYear() * 100 + dDesde.getUTCMonth();
+    
+    return compKey >= desdeKey;
+  };
+
   const resolveTemplate = (template, p) => {
     if (!template || !p) return null;
     const cliente = p.contratos?.clientes;
@@ -282,7 +302,7 @@ export default function EmissoesModule() {
 
   // ─── Upload em Lote ───────────────────────────────────────────────────────
 
-  const openBulkModal = () => { setBulkModal(true); setBulkResultados([]); };
+  const openBulkModal = (tipo = 'nf') => { setBulkType(tipo); setBulkModal(true); setBulkResultados([]); };
 
   const handleExportarParcelas = () => {
     window.open('/api/emissoes/export-parcelas', '_blank');
@@ -301,34 +321,69 @@ export default function EmissoesModule() {
     fetchParcelas();
   };
 
+  const runConferencias = (parsed, parcela, bulkType) => {
+    if (!parcela) return { conferencias: [], status: 'confirmar' };
+    const confs = [];
+    
+    // Valor
+    const vParsed = parseFloat((parsed.valor || '').replace(/\./g, '').replace(',', '.'));
+    const vParc = Number(parcela.valor);
+    if (vParsed > 0) {
+      confs.push({ label: 'Valor', ok: Math.abs(vParsed - vParc) < 0.01, parsed: vParsed, expected: vParc });
+    }
+
+    // Vencimento (Boleto)
+    if (bulkType === 'boleto' && parsed.vencimento) {
+      confs.push({ label: 'Vencimento', ok: parsed.vencimento === parcela.data_vencimento, parsed: parsed.vencimento, expected: parcela.data_vencimento });
+    }
+
+    // NF vs Documento (Boleto)
+    if (bulkType === 'boleto' && parsed.numeroDocumento && parcela.nf_numero) {
+      const nB = (parsed.numeroDocumento || '').replace(/\D/g, '');
+      const nP = (parcela.nf_numero || '').replace(/\D/g, '');
+      confs.push({ label: 'Nº NF', ok: nB === nP, parsed: parsed.numeroDocumento, expected: parcela.nf_numero });
+    }
+
+    const todasOk = confs.every(c => c.ok);
+    return { conferencias: confs, status: todasOk ? 'pronto' : 'confirmar' };
+  };
+
   const handleBulkFileChange = async (files) => {
     if (!files || files.length === 0) return;
     setBulkProcessando(true);
     setBulkResultados([]);
 
-    const { data: todasParcelas } = await supabase
+    let query = supabase
       .from('parcelas')
       .select('*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, clientes(id, nome, apelido, cnpj))')
-      .is('nf_numero', null)
       .not('status', 'eq', 'Paga');
+
+    if (bulkType === 'nf') {
+      query = query.is('nf_numero', null);
+    } else {
+      query = query.is('boleto_arquivo_url', null);
+    }
+
+    const { data: todasParcelas } = await query;
 
     setBulkTodasParcelas(todasParcelas || []);
     const resultados = [];
     for (const file of Array.from(files)) {
-      const parsed = await parseFile(file, 'nf');
+      const parsed = await parseFile(file, bulkType);
       const cnpjDigits = (parsed.cnpj || '').replace(/\D/g, '');
 
       let parcelasDoCliente = [];
-      if (cnpjDigits.length >= 8) {
+      if (bulkType === 'nf' && cnpjDigits.length >= 8) {
         parcelasDoCliente = (todasParcelas || []).filter(p => {
           const pCnpj = (p.contratos?.clientes?.cnpj || '').replace(/\D/g, '');
           return pCnpj && pCnpj.startsWith(cnpjDigits.slice(0, 8));
         });
       }
-      // fallback: nome do cliente
-      if (parcelasDoCliente.length === 0 && parsed.cliente) {
+      // fallback: nome do cliente ou pagador
+      const nomeBusca = bulkType === 'nf' ? parsed.cliente : parsed.pagador;
+      if (parcelasDoCliente.length === 0 && nomeBusca) {
         const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const nomeNF = norm(parsed.cliente);
+        const nomeNF = norm(nomeBusca);
         parcelasDoCliente = (todasParcelas || []).filter(p => {
           const pNome = norm(p.contratos?.clientes?.nome || '');
           return pNome.length > 4 && (pNome.includes(nomeNF.slice(0, 8)) || nomeNF.includes(pNome.slice(0, 8)));
@@ -342,6 +397,15 @@ export default function EmissoesModule() {
       let parcelaSugerida = parsedValor > 0
         ? parcelasDoCliente.find(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
         : null;
+
+      // NOVO: Se for boleto, tenta casar o "numeroDocumento" do boleto com o "nf_numero" da parcela
+      if (bulkType === 'boleto' && parsed.numeroDocumento) {
+        const matchPorNF = (todasParcelas || []).find(p => p.nf_numero === parsed.numeroDocumento);
+        if (matchPorNF) {
+          parcelaSugerida = matchPorNF;
+        }
+      }
+
       if (!parcelaSugerida && parcelasDoCliente.length === 1) parcelaSugerida = parcelasDoCliente[0];
 
       resultados.push({
@@ -354,9 +418,21 @@ export default function EmissoesModule() {
         status: !clienteMatch ? 'nao_encontrado' : !parcelaSugerida ? 'confirmar' : 'pronto',
         salvo: false,
         erro: null,
+        conferencias: [],
       });
     }
-    setBulkResultados(resultados);
+
+    // Pós-processamento para adicionar conferências
+    const resultadosComConferencias = resultados.map(r => {
+      const { conferencias, status } = runConferencias(r.parsed, r.parcelaSelecionada, bulkType);
+      return { 
+        ...r, 
+        conferencias,
+        status: (r.status === 'nao_encontrado') ? 'nao_encontrado' : status 
+      };
+    });
+
+    setBulkResultados(resultadosComConferencias);
     setBulkProcessando(false);
   };
 
@@ -364,7 +440,8 @@ export default function EmissoesModule() {
     setBulkResultados(prev => prev.map((r, i) => {
       if (i !== index) return r;
       const parcela = r.parcelasDoCliente.find(p => p.id === parcelaId) || null;
-      return { ...r, parcelaSelecionada: parcela, status: parcela ? 'pronto' : 'confirmar' };
+      const { conferencias, status } = runConferencias(r.parsed, parcela, bulkType);
+      return { ...r, parcelaSelecionada: parcela, conferencias, status };
     }));
   };
 
@@ -374,17 +451,94 @@ export default function EmissoesModule() {
       const parcelasDoCliente = bulkTodasParcelas.filter(p => p.contratos?.clientes?.id === clienteId);
       const clienteMatch = parcelasDoCliente[0]?.contratos?.clientes || null;
       const parsedValor = parseFloat((r.parsed.valor || '').replace(/\./g, '').replace(',', '.'));
-      const parcelaSugerida = parsedValor > 0
+      let parcelaSugerida = parsedValor > 0
         ? parcelasDoCliente.find(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
         : null;
+
+      if (bulkType === 'boleto' && r.parsed.numeroDocumento) {
+        const matchPorNF = parcelasDoCliente.find(p => p.nf_numero === r.parsed.numeroDocumento);
+        if (matchPorNF) parcelaSugerida = matchPorNF;
+      }
+
+      const { conferencias, status } = runConferencias(r.parsed, parcelaSugerida || (parcelasDoCliente.length === 1 ? parcelasDoCliente[0] : null), bulkType);
+
       return {
         ...r,
         clienteMatch,
         parcelasDoCliente,
         parcelaSelecionada: parcelaSugerida || (parcelasDoCliente.length === 1 ? parcelasDoCliente[0] : null),
-        status: !clienteMatch ? 'nao_encontrado' : (parcelaSugerida || parcelasDoCliente.length === 1) ? 'pronto' : 'confirmar',
+        conferencias,
+        status: !clienteMatch ? 'nao_encontrado' : status,
       };
     }));
+  };
+
+  const handleResolverInconsistencia = async (index, confIndex) => {
+    const item = bulkResultados[index];
+    const conf = item.conferencias[confIndex];
+    if (conf.ok) return;
+
+    if (conf.label === 'Valor') {
+      const resp = window.confirm(
+        `Divergência de valor para ${item.clienteMatch?.apelido || item.clienteMatch?.nome}!\n\n` +
+        `Arquivo: R$ ${conf.parsed?.toLocaleString('pt-BR')}\n` +
+        `Sistema: R$ ${conf.expected?.toLocaleString('pt-BR')}\n\n` +
+        `Clique em OK se for RETENÇÃO DE IMPOSTO (o sistema aceitará o arquivo sem alterar o valor da parcela).\n\n` +
+        `Clique em CANCELAR para escolher ATUALIZAR o valor da parcela no sistema.`
+      );
+
+      if (resp) {
+        // Opção 1: Retenção
+        setBulkResultados(prev => prev.map((r, i) => {
+          if (i !== index) return r;
+          const novasConfs = r.conferencias.map((c, ci) => ci === confIndex ? { ...c, ok: true, obs: '(Retenção)' } : c);
+          const todasOk = novasConfs.every(c => c.ok);
+          return { ...r, conferencias: novasConfs, status: todasOk ? 'pronto' : 'confirmar' };
+        }));
+        return;
+      } else {
+        // Opção 2: Atualizar valor da parcela
+        if (window.confirm(`Deseja ATUALIZAR permanentemente o valor desta parcela no sistema para R$ ${conf.parsed?.toLocaleString('pt-BR')}?`)) {
+          const { error } = await supabase.from('parcelas').update({ valor: conf.parsed }).eq('id', item.parcelaSelecionada.id);
+          if (error) {
+            alert("Erro: " + error.message);
+          } else {
+            setBulkResultados(prev => prev.map((r, i) => {
+              if (i !== index) return r;
+              const novaParcela = { ...r.parcelaSelecionada, valor: conf.parsed };
+              const { conferencias, status } = runConferencias(r.parsed, novaParcela, bulkType);
+              return { ...r, parcelaSelecionada: novaParcela, conferencias, status };
+            }));
+            fetchData();
+          }
+        }
+        return;
+      }
+    }
+
+    // Outros casos (Vencimento, Nº NF)
+    if (!window.confirm(`Deseja atualizar o campo "${conf.label}" da parcela para "${conf.parsed}"?`)) return;
+
+    const updates = {};
+    if (conf.label === 'Vencimento') updates.data_vencimento = conf.parsed;
+    if (conf.label === 'Nº NF') updates.nf_numero = conf.parsed;
+
+    const { error } = await supabase
+      .from('parcelas')
+      .update(updates)
+      .eq('id', item.parcelaSelecionada.id);
+
+    if (error) {
+      alert("Erro ao atualizar parcela: " + error.message);
+    } else {
+      setBulkResultados(prev => prev.map((r, i) => {
+        if (i !== index) return r;
+        const novaParcela = { ...r.parcelaSelecionada, ...updates };
+        const { conferencias, status } = runConferencias(r.parsed, novaParcela, bulkType);
+        return { ...r, parcelaSelecionada: novaParcela, conferencias, status };
+      }));
+      fetchData();
+    }
   };
 
   const handleBulkRemove = (index) => {
@@ -402,18 +556,25 @@ export default function EmissoesModule() {
         const fd = new FormData();
         fd.append('file', item.file);
         fd.append('parcelaId', item.parcelaSelecionada.id);
-        fd.append('tipo', 'nf');
+        fd.append('tipo', bulkType);
         const res = await fetch('/api/emissoes/upload', { method: 'POST', body: fd });
         const json = await res.json();
         if (json.error) throw new Error(json.error);
 
-        const novoStatus = ['NF Emitida', 'Paga'].includes(item.parcelaSelecionada.status)
-          ? item.parcelaSelecionada.status : 'NF Emitida';
-        await supabase.from('parcelas').update({
-          nf_numero: item.parsed.numero || null,
-          nf_arquivo_url: json.url,
-          status: novoStatus,
-        }).eq('id', item.parcelaSelecionada.id);
+        if (bulkType === 'nf') {
+          const novoStatus = ['NF Emitida', 'Paga'].includes(item.parcelaSelecionada.status)
+            ? item.parcelaSelecionada.status : 'NF Emitida';
+          await supabase.from('parcelas').update({
+            nf_numero: item.parsed.numero || null,
+            nf_arquivo_url: json.url,
+            status: novoStatus,
+          }).eq('id', item.parcelaSelecionada.id);
+        } else {
+          await supabase.from('parcelas').update({
+            boleto_numero: item.parsed.numeroDocumento || null,
+            boleto_arquivo_url: json.url,
+          }).eq('id', item.parcelaSelecionada.id);
+        }
 
         if (item.clienteMatch?.id) {
           await salvarEnderecoCliente(item.parsed, { contratos: { cliente_id: item.clienteMatch.id } });
@@ -642,6 +803,34 @@ export default function EmissoesModule() {
     setParsingBoleto(false);
   };
 
+  const handleRemoverArquivo = async (tipo, pArg = null) => {
+    const parcela = pArg || modal.parcela;
+    if (!parcela) return;
+    const label = tipo === 'nf' ? 'a Nota Fiscal' : 'o Boleto';
+    if (!window.confirm(`Tem certeza que deseja remover ${label} desta parcela?`)) return;
+
+    const updates = tipo === 'nf' 
+      ? { nf_arquivo_url: null }
+      : { boleto_arquivo_url: null };
+
+    const { error } = await supabase
+      .from('parcelas')
+      .update(updates)
+      .eq('id', parcela.id);
+
+    if (error) {
+      alert("Erro ao remover: " + error.message);
+    } else {
+      if (modal.parcela?.id === parcela.id) {
+        setModal(prev => ({
+          ...prev,
+          parcela: { ...prev.parcela, ...updates }
+        }));
+      }
+      fetchData();
+    }
+  };
+
   // ─── Consolidated email modal ─────────────────────────────────────────────
 
   const openEmailModal = async (grupo) => {
@@ -703,6 +892,9 @@ export default function EmissoesModule() {
   // ─── derived render values ─────────────────────────────────────────────────
 
   const parcelasFiltradas = parcelas.filter(p => {
+    // Se a parcela está congelada, só mostramos se o filtro for 'todos'
+    if (isParcelaCongelada(p) && filtroStatus !== 'todos') return false;
+
     switch (filtroStatus) {
       case 'pendentes': return p.status !== 'Paga';
       case 'sem_nf':    return !p.nf_numero && p.status !== 'Paga';
@@ -711,8 +903,8 @@ export default function EmissoesModule() {
     }
   });
 
-  const countSemNF = parcelas.filter(p => !p.nf_numero && p.status !== 'Paga').length;
-  const countNFok  = parcelas.filter(p => p.nf_numero && !p.boleto_numero && p.status !== 'Paga').length;
+  const countSemNF = parcelas.filter(p => !p.nf_numero && p.status !== 'Paga' && !isParcelaCongelada(p)).length;
+  const countNFok  = parcelas.filter(p => p.nf_numero && !p.boleto_numero && p.status !== 'Paga' && !isParcelaCongelada(p)).length;
 
   const anosDisponiveis = [];
   for (let y = today.getFullYear() - 2; y <= today.getFullYear() + 2; y++) anosDisponiveis.push(y);
@@ -744,7 +936,7 @@ export default function EmissoesModule() {
   // "Por Cliente" grouped view
   const parcelasGroupedByCliente = useMemo(() => {
     const groups = {};
-    parcelas.filter(p => p.status !== 'Paga').forEach(p => {
+    parcelas.filter(p => p.status !== 'Paga' && !isParcelaCongelada(p)).forEach(p => {
       const cId = p.contratos?.cliente_id;
       if (!cId) return;
       if (!groups[cId]) groups[cId] = { cliente: p.contratos?.clientes, parcelas: [] };
@@ -879,8 +1071,11 @@ export default function EmissoesModule() {
           {importando ? 'Importando...' : '⬆ Importar Preenchido'}
           <input type="file" accept=".csv,.xlsx" style={{ display: 'none' }} onChange={e => { handleImportarParcelas(e.target.files[0]); e.target.value = ''; }} disabled={importando} />
         </label>
-        <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={openBulkModal}>
-          ⬆ Upload em Lote
+        <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={() => openBulkModal('nf')}>
+          ⬆ Upload NFs em Lote
+        </button>
+        <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={() => openBulkModal('boleto')}>
+          ⬆ Upload Boletos em Lote
         </button>
         <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={openAjustarModal}>
           ✏️ Ajustar Lançamentos
@@ -915,167 +1110,131 @@ export default function EmissoesModule() {
           <option value="nf_ok">NF ok, sem boleto</option>
           <option value="todos">Todos (incl. pagos)</option>
         </select>
-        <div style={{ marginLeft: 'auto', display: 'flex', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
-          {[['parcelas', 'Por Parcela'], ['cliente', 'Por Cliente']].map(([val, label]) => (
-            <button
-              key={val}
-              style={{
-                padding: '6px 14px', fontSize: '12px', border: 'none', cursor: 'pointer',
-                borderLeft: val === 'cliente' ? '1px solid var(--border)' : 'none',
-                backgroundColor: visao === val ? 'var(--secondary)' : 'transparent',
-                color: visao === val ? '#fff' : 'var(--text-main)',
-                fontWeight: visao === val ? 700 : 400,
-              }}
-              onClick={() => setVisao(val)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
       </div>
 
-      {/* ── Tabela Por Parcela ───────────────────────────────────────────────── */}
-      {visao === 'parcelas' && (
-        <div className="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente / Contrato</th>
-                <th style={{ textAlign: 'center' }}>Competência</th>
-                <th style={{ textAlign: 'right' }}>Valor</th>
-                <th style={{ textAlign: 'center' }}>Vencimento</th>
-                <th style={{ textAlign: 'center' }}>Nota Fiscal</th>
-                <th style={{ textAlign: 'center' }}>Boleto</th>
-                <th style={{ textAlign: 'center' }}>E-mail</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px' }}>Carregando...</td></tr>
-              ) : parcelasFiltradas.length === 0 ? (
-                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Nenhuma parcela encontrada para este período.</td></tr>
-              ) : parcelasFiltradas.map(p => {
-                const nfSt = getNFStatus(p);
-                const bolSt = getBoletoStatus(p);
-                const overdue = isOverdue(p);
-                const cliente = p.contratos?.clientes;
-                return (
-                  <tr key={p.id} style={{ opacity: p.status === 'Paga' ? 0.55 : 1 }}>
-                    <td>
-                      <strong style={{ display: 'block', color: 'var(--secondary)' }}>{cliente?.apelido || cliente?.nome}</strong>
-                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{p.contratos?.titulo}</span>
-                    </td>
-                    <td style={{ textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>{getMesPrestacao(p)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '13px' }}>{new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</div>
-                      {overdue && <div style={{ fontSize: '10px', color: '#ef4444', fontWeight: 700, marginTop: '2px' }}>EM ATRASO</div>}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
-                        <span style={{ fontSize: '11px', fontWeight: 600, color: nfSt.color, backgroundColor: nfSt.bg, border: `1px solid ${nfSt.color}40`, borderRadius: '4px', padding: '1px 8px' }}>{nfSt.label}</span>
-                        {p.nf_numero && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>#{p.nf_numero}</span>}
-                        {p.nf_arquivo_url && <a href={p.nf_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '10px', color: 'var(--secondary)', textDecoration: 'underline' }}>Ver arquivo</a>}
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px' }}>
-                        <span style={{ fontSize: '11px', fontWeight: 600, color: bolSt.color, backgroundColor: bolSt.bg, border: `1px solid ${bolSt.color}40`, borderRadius: '4px', padding: '1px 8px' }}>{bolSt.label}</span>
-                        {p.boleto_arquivo_url && <a href={p.boleto_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '10px', color: 'var(--secondary)', textDecoration: 'underline' }}>Ver arquivo</a>}
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      {p.email_enviado
-                        ? <span style={{ fontSize: '11px', fontWeight: 600, color: '#10b981', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '4px', padding: '1px 8px' }}>Enviado</span>
-                        : <span style={{ fontSize: '11px', color: '#94a3b8', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1px 8px' }}>Em breve</span>
-                      }
-                    </td>
-                    <td>
-                      <button className="btn btn-secondary" style={{ fontSize: '12px', padding: '4px 10px', whiteSpace: 'nowrap' }} onClick={() => openModal(p)}>
-                        Gerenciar
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* ── Tabela Unificada (Agrupada por Cliente) ───────────────────────────────────────────────── */}
+      <div className="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Cliente / Parcela</th>
+              <th style={{ textAlign: 'center' }}>Competência</th>
+              <th style={{ textAlign: 'right' }}>Valor</th>
+              <th style={{ textAlign: 'center' }}>Vencimento</th>
+              <th style={{ textAlign: 'center' }}>Nota Fiscal</th>
+              <th style={{ textAlign: 'center' }}>Boleto</th>
+              <th style={{ textAlign: 'center' }}>E-mail</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px' }}>Carregando...</td></tr>
+            ) : parcelasFiltradas.length === 0 ? (
+              <tr><td colSpan="8" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Nenhuma parcela encontrada para este período.</td></tr>
+            ) : (() => {
+              // Agrupa parcelas filtradas
+              const grouped = {};
+              parcelasFiltradas.forEach(p => {
+                const cId = p.contratos?.cliente_id;
+                if (!cId) return;
+                if (!grouped[cId]) grouped[cId] = { cliente: p.contratos?.clientes, parcelas: [] };
+                grouped[cId].parcelas.push(p);
+              });
+              const groupedArray = Object.values(grouped).sort((a, b) =>
+                (a.cliente?.apelido || a.cliente?.nome || '').localeCompare(b.cliente?.apelido || b.cliente?.nome || '')
+              );
 
-      {/* ── Tabela Por Cliente ───────────────────────────────────────────────── */}
-      {visao === 'cliente' && (
-        <div className="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente</th>
-                <th style={{ textAlign: 'center' }}>Parcelas</th>
-                <th style={{ textAlign: 'center' }}>NFs</th>
-                <th style={{ textAlign: 'center' }}>Boletos</th>
-                <th style={{ textAlign: 'right' }}>Total</th>
-                <th>E-mail de Cobrança</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '40px' }}>Carregando...</td></tr>
-              ) : parcelasGroupedByCliente.length === 0 ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Nenhum cliente com parcelas pendentes.</td></tr>
-              ) : parcelasGroupedByCliente.map(grupo => {
+              return groupedArray.map(grupo => {
                 const { cliente, parcelas: gParcelas } = grupo;
-                const totalNF = gParcelas.filter(p => p.nf_numero).length;
-                const totalBoleto = gParcelas.filter(p => p.boleto_numero).length;
-                const totalValor = gParcelas.reduce((s, p) => s + Number(p.valor), 0);
-                const temAtrasada = gParcelas.some(p => isOverdue(p));
                 return (
-                  <tr key={cliente?.id}>
-                    <td>
-                      <strong style={{ color: 'var(--secondary)' }}>{cliente?.apelido || cliente?.nome}</strong>
-                      {temAtrasada && <span style={{ marginLeft: '8px', fontSize: '10px', color: '#ef4444', fontWeight: 700 }}>EM ATRASO</span>}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span style={{ fontWeight: 600 }}>{gParcelas.length}</span>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>parcelas</span>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 600, color: totalNF === gParcelas.length ? '#10b981' : '#ef4444' }}>
-                        {totalNF}/{gParcelas.length}
-                      </span>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>emitidas</span>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 600, color: totalBoleto === gParcelas.length ? '#10b981' : '#d97706' }}>
-                        {totalBoleto}/{gParcelas.length}
-                      </span>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>emitidos</span>
-                    </td>
-                    <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      R$ {totalValor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                    </td>
-                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      {cliente?.email_cobranca || '—'}
-                    </td>
-                    <td>
-                      <button
-                        className="btn btn-primary"
-                        style={{ fontSize: '12px', padding: '4px 12px', whiteSpace: 'nowrap' }}
-                        onClick={() => openEmailModal(grupo)}
-                      >
-                        Compor E-mail
-                      </button>
-                    </td>
-                  </tr>
+                  <Fragment key={cliente?.id || Math.random()}>
+                    {/* Linha do Cliente (Header) */}
+                    <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid var(--border)' }}>
+                      <td colSpan="7" style={{ padding: '6px 16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <strong style={{ color: 'var(--secondary)', fontSize: '13px' }}>{cliente?.apelido || cliente?.nome}</strong>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({gParcelas.length})</span>
+                          {gParcelas.some(p => isOverdue(p)) && (
+                            <span style={{ fontSize: '9px', color: '#ef4444', fontWeight: 700, backgroundColor: '#fef2f2', padding: '1px 5px', borderRadius: '4px' }}>EM ATRASO</span>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '4px 16px' }}>
+                        <button
+                          className="btn btn-primary"
+                          style={{ fontSize: '10px', padding: '2px 8px', whiteSpace: 'nowrap' }}
+                          onClick={() => openEmailModal({ cliente, parcelas: parcelasGroupedByCliente.find(g => g.cliente?.id === cliente?.id)?.parcelas || gParcelas })}
+                        >
+                          ✉ E-mail Geral
+                        </button>
+                      </td>
+                    </tr>
+                    {/* Linhas das Parcelas */}
+                    {gParcelas.map(p => {
+                      const nfSt = getNFStatus(p);
+                      const bolSt = getBoletoStatus(p);
+                      const overdue = isOverdue(p);
+                      return (
+                        <tr key={p.id} style={{ opacity: p.status === 'Paga' ? 0.55 : 1 }}>
+                          <td style={{ padding: '8px 8px 8px 24px' }}>
+                            <span style={{ fontSize: '12px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ color: 'var(--border)' }}>└</span>
+                              {p.contratos?.titulo}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>{getMesPrestacao(p)}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap', fontSize: '12px' }}>
+                            R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '12px' }}>{new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</div>
+                            {overdue && <div style={{ fontSize: '9px', color: '#ef4444', fontWeight: 700 }}>EM ATRASO</div>}
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '10px', fontWeight: 600, color: nfSt.color, backgroundColor: nfSt.bg, border: `1px solid ${nfSt.color}40`, borderRadius: '4px', padding: '0px 6px' }}>{nfSt.label}</span>
+                              {p.nf_numero && <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>#{p.nf_numero}</span>}
+                              {p.nf_arquivo_url && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                  <a href={p.nf_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '10px', color: 'var(--secondary)', textDecoration: 'underline' }}>PDF</a>
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); handleRemoverArquivo('nf', p); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px', padding: '0 2px' }} title="Remover">&times;</button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '10px', fontWeight: 600, color: bolSt.color, backgroundColor: bolSt.bg, border: `1px solid ${bolSt.color}40`, borderRadius: '4px', padding: '0px 6px' }}>{bolSt.label}</span>
+                              {p.boleto_arquivo_url && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                                  <a href={p.boleto_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '10px', color: 'var(--secondary)', textDecoration: 'underline' }}>PDF</a>
+                                  <button type="button" onClick={(e) => { e.stopPropagation(); handleRemoverArquivo('boleto', p); }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px', padding: '0 2px' }} title="Remover">&times;</button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            {p.email_enviado
+                              ? <span style={{ fontSize: '11px', fontWeight: 600, color: '#10b981', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '4px', padding: '1px 8px' }}>Enviado</span>
+                              : <span style={{ fontSize: '11px', color: '#94a3b8', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1px 8px' }}>Em breve</span>
+                            }
+                          </td>
+                          <td style={{ textAlign: 'right', padding: '8px 16px' }}>
+                            <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '2px 8px', whiteSpace: 'nowrap' }} onClick={() => openModal(p)}>
+                              Gerenciar
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </Fragment>
                 );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+              });
+            })()}
+          </tbody>
+        </table>
+      </div>
 
       {/* ── Modal Individual ─────────────────────────────────────────────────── */}
       <div className={`modal-overlay ${modal.open ? 'active' : ''}`}>
@@ -1149,9 +1308,19 @@ export default function EmissoesModule() {
                         <input type="file" accept=".pdf,.xml" className="form-control" style={{ padding: '4px', fontSize: '12px', cursor: 'pointer' }} onChange={e => handleNFFileChange(e.target.files[0] || null)} />
                       </div>
                       {p.nf_arquivo_url && (
-                        <a href={p.nf_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--secondary)', display: 'block', marginTop: '8px', textDecoration: 'underline' }}>
-                          → Ver arquivo atual
-                        </a>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                          <a href={p.nf_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--secondary)', textDecoration: 'underline' }}>
+                            → Ver arquivo atual
+                          </a>
+                          <button 
+                            type="button" 
+                            onClick={() => handleRemoverArquivo('nf')}
+                            style={{ background: '#fee2e2', border: '1px solid #fecaca', color: '#dc2626', borderRadius: '4px', padding: '1px 5px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}
+                            title="Remover Nota Fiscal"
+                          >
+                            &times; Remover
+                          </button>
+                        </div>
                       )}
                       {parseResultNF && !parseResultNF.erro && (
                         <div style={{ marginTop: '10px', padding: '8px 10px', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', fontSize: '11px', lineHeight: 1.6 }}>
@@ -1200,9 +1369,19 @@ export default function EmissoesModule() {
                         <input type="file" accept=".pdf" className="form-control" style={{ padding: '4px', fontSize: '12px', cursor: 'pointer' }} onChange={e => handleBoletoFileChange(e.target.files[0] || null)} />
                       </div>
                       {p.boleto_arquivo_url && (
-                        <a href={p.boleto_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--secondary)', display: 'block', marginTop: '8px', textDecoration: 'underline' }}>
-                          → Ver arquivo atual
-                        </a>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                          <a href={p.boleto_arquivo_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--secondary)', textDecoration: 'underline' }}>
+                            → Ver arquivo atual
+                          </a>
+                          <button 
+                            type="button" 
+                            onClick={() => handleRemoverArquivo('boleto')}
+                            style={{ background: '#fee2e2', border: '1px solid #fecaca', color: '#dc2626', borderRadius: '4px', padding: '1px 5px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}
+                            title="Remover Boleto"
+                          >
+                            &times; Remover
+                          </button>
+                        </div>
                       )}
                       {parseResultBoleto && !parseResultBoleto.erro && (
                         <div style={{ marginTop: '10px', padding: '8px 10px', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', fontSize: '11px', lineHeight: 1.6 }}>
@@ -1339,14 +1518,14 @@ export default function EmissoesModule() {
       <div className={`modal-overlay ${bulkModal ? 'active' : ''}`}>
         <div className="modal" style={{ width: '92vw', maxWidth: '1100px' }}>
           <div className="modal-header">
-            <h2>Upload de NFs em Lote</h2>
+            <h2>Upload de {bulkType === 'nf' ? 'NFs' : 'Boletos'} em Lote</h2>
             <button className="close-modal" onClick={() => setBulkModal(false)}>&times;</button>
           </div>
           <div className="modal-body">
             {/* Seletor de arquivos */}
             <div style={{ marginBottom: '20px', padding: '16px', border: '2px dashed var(--secondary)', borderRadius: '8px', backgroundColor: '#f8faff' }}>
               <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--secondary)', display: 'block', marginBottom: '8px' }}>
-                Selecione todas as NFs de uma vez
+                Selecione {bulkType === 'nf' ? 'todas as NFs' : 'todos os boletos'} de uma vez
               </label>
               <input
                 type="file"
@@ -1387,7 +1566,7 @@ export default function EmissoesModule() {
                         <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600 }}>Arquivo</th>
                         <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600 }}>Cliente</th>
                         <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600 }}>Parcela</th>
-                        <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>NF Nº</th>
+                        <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>{bulkType === 'nf' ? 'NF Nº' : 'Boleto Nº'}</th>
                         <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }}>Valor</th>
                         <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 600 }}>Status</th>
                         <th style={{ padding: '8px 6px', width: '32px' }}></th>
@@ -1442,17 +1621,34 @@ export default function EmissoesModule() {
                             )}
                           </td>
                           <td style={{ padding: '8px 10px', textAlign: 'center', fontFamily: 'monospace' }}>
-                            {r.parsed.numero || '—'}
+                            {bulkType === 'nf' ? (r.parsed.numero || '—') : (r.parsed.numeroDocumento || '—')}
                           </td>
                           <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
                             {r.parsed.valor ? `R$ ${r.parsed.valor}` : '—'}
                           </td>
                           <td style={{ padding: '8px 10px', textAlign: 'center' }}>
                             {r.status === 'pronto'        && <span style={{ color: '#10b981', fontWeight: 700 }}>✅</span>}
-                            {r.status === 'confirmar'     && <span style={{ color: '#d97706', fontWeight: 700 }}>⚠️</span>}
+                            {r.status === 'confirmar'     && (
+                              <span style={{ color: '#d97706', fontWeight: 700 }} title={r.conferencias?.some(c => !c.ok) ? "Inconsistências detectadas" : "Selecione a parcela"}>⚠️</span>
+                            )}
                             {r.status === 'nao_encontrado'&& <span style={{ color: '#ef4444', fontWeight: 700 }}>❌</span>}
                             {r.status === 'salvo'         && <span style={{ color: '#10b981', fontWeight: 700 }}>💾</span>}
                             {r.status === 'erro'          && <span style={{ color: '#ef4444', fontSize: '11px' }}>{r.erro}</span>}
+
+                            {/* Detalhes das inconsistências */}
+                            {r.conferencias?.filter(c => !c.ok).map((c, ci) => {
+                              const confIndex = r.conferencias.indexOf(c);
+                              return (
+                                <div 
+                                  key={ci} 
+                                  onClick={() => handleResolverInconsistencia(i, confIndex)}
+                                  style={{ fontSize: '9px', color: '#ef4444', marginTop: '2px', lineHeight: '1.1', cursor: 'pointer', textDecoration: 'underline dotted' }}
+                                  title={`Clique para atualizar a parcela com "${c.parsed}"`}
+                                >
+                                  {c.label}: {c.label === 'Valor' ? `${c.parsed?.toLocaleString('pt-BR')} vs ${c.expected?.toLocaleString('pt-BR')}` : `${c.parsed} vs ${c.expected}`}
+                                </div>
+                              );
+                            })}
                           </td>
                           <td style={{ padding: '4px 6px', textAlign: 'center' }}>
                             {r.status !== 'salvo' && (
@@ -1480,7 +1676,7 @@ export default function EmissoesModule() {
                 onClick={handleBulkSalvar}
                 disabled={bulkSalvando}
               >
-                {bulkSalvando ? 'Salvando...' : `Salvar ${bulkResultados.filter(r => r.status === 'pronto').length} NF(s)`}
+                {bulkSalvando ? 'Salvando...' : `Salvar ${bulkResultados.filter(r => r.status === 'pronto').length} arquivo(s)`}
               </button>
             )}
           </div>

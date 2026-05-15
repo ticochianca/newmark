@@ -10,8 +10,13 @@ export default function ParcelasModule() {
   const [parcelasAgrupadas, setParcelasAgrupadas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [connections, setConnections] = useState([]);
+  const [hoveredParcela, setHoveredParcela] = useState(null);
   const [mostrarAlocacao, setMostrarAlocacao] = useState(false);
   const [anosDisponiveis, setAnosDisponiveis] = useState([]);
+  const [viewMode, setViewMode] = useState('cronograma'); // 'cronograma' | 'tabela'
+  const [filtroCliente, setFiltroCliente] = useState('');
+  const [dataInicio, setDataInicio] = useState('');
+  const [dataFim, setDataFim] = useState('');
 
   const tableWrapperRef = useRef(null);
 
@@ -20,13 +25,13 @@ export default function ParcelasModule() {
 
   const fetchParcelas = async () => {
     setLoading(true);
-    const startOfYear = `${anoSelecionado}-01-01`;
-    const endOfYear = `${anoSelecionado}-12-31`;
+    const start = dataInicio || `${anoSelecionado}-01-01`;
+    const end = dataFim || `${anoSelecionado}-12-31`;
 
     const { data, error } = await supabase
       .from('parcelas')
       .select('*, contratos(id, titulo, cobranca_mesmo_mes, clientes(nome, apelido), contrato_atendentes(*, profiles(nome)))')
-      .or(`and(data_vencimento.gte.${startOfYear},data_vencimento.lte.${endOfYear}),and(data_original.gte.${startOfYear},data_original.lte.${endOfYear})`)
+      .or(`and(data_vencimento.gte.${start},data_vencimento.lte.${end}),and(data_original.gte.${start},data_original.lte.${end})`)
       .order('data_vencimento', { ascending: true });
       
     if (error) {
@@ -92,7 +97,7 @@ export default function ParcelasModule() {
 
   useEffect(() => {
     fetchParcelas();
-  }, [anoSelecionado]);
+  }, [anoSelecionado, dataInicio, dataFim]);
 
   useEffect(() => {
     const fetchAnos = async () => {
@@ -193,7 +198,7 @@ export default function ParcelasModule() {
   }, [parcelasAgrupadas, mostrarAlocacao]);
 
 
-  const openModal = (p) => {
+  const openModal = (p, defaultMode = null) => {
     const isGhost = p.isGhost;
     const realId = isGhost ? p.id.replace('ghost-paid-', '').replace('ghost-', '') : p.id;
     const isCongelada = p.status === 'Congelada';
@@ -202,7 +207,7 @@ export default function ParcelasModule() {
       isOpen: true,
       parcela: p,
       realId: realId,
-      mode: isCongelada ? 'emitir_pontual' : (p.status === 'Paga' ? 'desfazer_pagamento' : 'pagar'),
+      mode: defaultMode || (isCongelada ? 'emitir_pontual' : (p.status === 'Paga' ? 'desfazer_pagamento' : 'pagar')),
       data: p.status === 'Paga' ? (p.data_pagamento || '') : new Date().toISOString().split('T')[0],
       nfNumero: p.nf_numero || '',
       boletoVencimento: p.data_vencimento || '',
@@ -210,6 +215,47 @@ export default function ParcelasModule() {
       valorAjuste: p.valor != null ? p.valor.toString() : '',
       obsAjuste: '',
     });
+  };
+
+  const handlePagarRapido = async (e, p) => {
+    e.stopPropagation();
+    const hoje = new Date().toISOString().split('T')[0];
+    const { error } = await supabase
+      .from('parcelas')
+      .update({ status: 'Paga', data_pagamento: hoje })
+      .eq('id', p.id);
+    if (!error) { fetchParcelas(); setHoveredParcela(null); }
+    else alert('Erro: ' + error.message);
+  };
+
+  const handleDesfazerRapido = async (e, p) => {
+    e.stopPropagation();
+    const { error } = await supabase
+      .from('parcelas')
+      .update({ status: 'Pendente', data_pagamento: null })
+      .eq('id', p.id);
+    if (!error) { fetchParcelas(); setHoveredParcela(null); }
+    else alert('Erro: ' + error.message);
+  };
+
+  const handleAdiarRapido = async (e, p) => {
+    e.stopPropagation();
+    const dateObj = new Date(p.data_vencimento + 'T12:00:00');
+    dateObj.setMonth(dateObj.getMonth() + 1);
+    const novaData = dateObj.toISOString().split('T')[0];
+    
+    const hist = [...(p.historico_reprogramacao || []), {
+      data_antiga: p.data_vencimento,
+      data_nova: novaData,
+      data_alteracao: new Date().toISOString()
+    }];
+
+    const { error } = await supabase
+      .from('parcelas')
+      .update({ data_vencimento: novaData, historico_reprogramacao: hist })
+      .eq('id', p.id);
+    if (!error) { fetchParcelas(); setHoveredParcela(null); }
+    else alert('Erro: ' + error.message);
   };
 
   const handleActionSubmit = async (e) => {
@@ -409,31 +455,144 @@ export default function ParcelasModule() {
 
   const mesesHeaders = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
+  const dataFiltrada = parcelasAgrupadas.filter(g => {
+    if (!filtroCliente) return true;
+    const nome = (g.contrato?.clientes?.nome || '').toLowerCase();
+    const apelido = (g.contrato?.clientes?.apelido || '').toLowerCase();
+    const termo = filtroCliente.toLowerCase();
+    return nome.includes(termo) || apelido.includes(termo);
+  });
+
   return (
     <section className="content-area active">
       <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', alignItems: 'center' }}>
-        <h2 style={{marginRight: 'auto', color: 'var(--secondary)', fontSize: '18px'}}>Cronograma de Parcelas</h2>
+        <h2 style={{marginRight: '16px', color: 'var(--secondary)', fontSize: '18px'}}>Cronograma de Parcelas</h2>
+        <div className="btn-group" style={{ display: 'flex', marginRight: '16px' }}>
+          <button 
+            className={`btn ${viewMode === 'cronograma' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ borderRadius: '6px 0 0 6px', borderRight: 'none', padding: '6px 12px', fontSize: '14px' }}
+            onClick={() => setViewMode('cronograma')}
+          >
+            Cronograma
+          </button>
+          <button 
+            className={`btn ${viewMode === 'tabela' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ borderRadius: '0 6px 6px 0', padding: '6px 12px', fontSize: '14px' }}
+            onClick={() => setViewMode('tabela')}
+          >
+            Tabela
+          </button>
+        </div>
+
         <button 
           className={`btn ${mostrarAlocacao ? 'btn-primary' : 'btn-secondary'}`}
+          style={{ fontSize: '14px', padding: '6px 12px' }}
           onClick={() => setMostrarAlocacao(!mostrarAlocacao)}
         >
           {mostrarAlocacao ? 'Omitir Alocação' : 'Mostrar Alocação'}
         </button>
-        <label style={{fontWeight: 600, color: 'var(--secondary)'}}>Ano Base:</label>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto' }}>
+          <input 
+            type="text" 
+            className="form-control" 
+            placeholder="Filtrar cliente..." 
+            value={filtroCliente}
+            onChange={(e) => setFiltroCliente(e.target.value)}
+            style={{ width: '150px' }}
+          />
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '4px 8px', borderRadius: '6px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>De:</span>
+            <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Até:</span>
+            <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
+            {(dataInicio || dataFim || filtroCliente) && (
+              <button 
+                className="btn btn-secondary" 
+                style={{ padding: '2px 8px', fontSize: '11px' }} 
+                onClick={() => { setDataInicio(''); setDataFim(''); setFiltroCliente(''); }}
+              >
+                Limpar
+              </button>
+            )}
+          </div>
+        </div>
+        <label style={{fontWeight: 600, color: 'var(--secondary)', marginLeft: '16px'}}>Ano Base:</label>
         <select 
           className="form-control" 
           style={{ width: '120px' }} 
           value={anoSelecionado}
           onChange={(e) => setAnoSelecionado(parseInt(e.target.value, 10))}
         >
-          {(anosDisponiveis.length > 0 ? anosDisponiveis : [currentYear - 1, currentYear, currentYear + 1, currentYear + 2]).map(year => (
+          {(anosDisponiveis.length > 0 ? anosDisponiveis : [currentYear - 1, currentYear, currentYear, currentYear + 1, currentYear + 2]).map(year => (
             <option key={year} value={year}>{year}</option>
           ))}
         </select>
       </div>
 
-      <div className="table-container" style={{ overflowX: 'auto', overflowY: 'visible', paddingBottom: '20px' }}>
-        <div style={{ position: 'relative', display: 'inline-block', minWidth: '100%' }} ref={tableWrapperRef}>
+      {viewMode === 'tabela' ? (
+        <div className="table-container" style={{ overflowX: 'auto', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid var(--border)' }}>
+          <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid var(--border)' }}>
+                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)' }}>Cliente / Contrato</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)' }}>Competência</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)' }}>Vencimento Orig.</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)' }}>Vencimento Atual</th>
+                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)' }}>Pagamento</th>
+                <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: 'var(--secondary)' }}>Valor</th>
+                <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 600, color: 'var(--secondary)' }}>Status</th>
+                <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 600, color: 'var(--secondary)' }}>Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dataFiltrada.flatMap(g => 
+                [1,2,3,4,5,6,7,8,9,10,11,12].flatMap(m => 
+                  g.meses[m].filter(p => !p.isGhost).map(p => {
+                    const status = getStatusDisplay(p);
+                    const visual = getVisualStyles(status, p);
+                    return (
+                      <tr key={p.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background-color 0.2s' }} className="hover-row">
+                        <td style={{ padding: '12px 16px' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--secondary)' }}>{g.contrato?.clientes?.apelido || g.contrato?.clientes?.nome}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{g.contrato?.titulo}</div>
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>{getMesPrestacao(p)}</td>
+                        <td style={{ padding: '12px 16px' }}>{p.data_original ? new Date(p.data_original + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}</td>
+                        <td style={{ padding: '12px 16px' }}>{new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</td>
+                        <td style={{ padding: '12px 16px' }}>{p.data_pagamento ? new Date(p.data_pagamento + 'T12:00:00').toLocaleDateString('pt-BR') : '-'}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600 }}>R$ {p.valor?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                          <span style={{ 
+                            padding: '4px 8px', 
+                            borderRadius: '12px', 
+                            fontSize: '11px', 
+                            fontWeight: 600,
+                            backgroundColor: visual.bg,
+                            color: visual.color,
+                            border: `1px solid ${visual.color}33`
+                          }}>
+                            {status}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                            {p.status !== 'Paga' && (
+                              <button className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => handlePagarRapido({stopPropagation:()=>{}}, p)}>Pagar</button>
+                            )}
+                            <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => openModal(p)}>Editar</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="table-container" style={{ overflowX: 'auto', overflowY: 'visible', paddingBottom: '20px' }}>
+          <div style={{ position: 'relative', display: 'inline-block', minWidth: '100%' }} ref={tableWrapperRef}>
           
           {/* SVG Overlay */}
           <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 10 }}>
@@ -568,8 +727,10 @@ export default function ParcelasModule() {
                                 return (
                                   <div
                                     key={p.id}
-                                    className="real-node"
+                                    className="real-node group"
                                     data-id={p.id}
+                                    onMouseEnter={() => setHoveredParcela(p.id)}
+                                    onMouseLeave={() => setHoveredParcela(null)}
                                     style={{
                                       width: '100%',
                                       border: isCongelada ? '1px dashed #cbd5e1' : '1px solid var(--border)',
@@ -581,10 +742,71 @@ export default function ParcelasModule() {
                                       opacity: isCongelada ? 0.55 : 1,
                                       boxShadow: isCongelada ? 'none' : '0 1px 2px rgba(0,0,0,0.05)',
                                       position: 'relative',
-                                      zIndex: 1
+                                      zIndex: hoveredParcela === p.id ? 10 : 1
                                     }}
                                     onClick={() => openModal(p)}
                                   >
+                                    {/* Popover de Ações Rápidas */}
+                                    {hoveredParcela === p.id && (
+                                      <div 
+                                        style={{
+                                          position: 'absolute',
+                                          bottom: '100%',
+                                          left: '50%',
+                                          transform: 'translateX(-50%)',
+                                          paddingBottom: '8px', // Ponte invisível para não perder o hover
+                                          zIndex: 20
+                                        }}
+                                        onClick={e => e.stopPropagation()}
+                                      >
+                                        <div style={{
+                                          backgroundColor: '#fff',
+                                          border: '1px solid var(--border)',
+                                          borderRadius: '6px',
+                                          boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)',
+                                          padding: '4px',
+                                          display: 'flex',
+                                          gap: '4px',
+                                        }}>
+                                          {p.status !== 'Paga' && p.status !== 'Congelada' && (
+                                            <button 
+                                              className="btn btn-primary" 
+                                              style={{fontSize: '10px', padding: '2px 8px', minWidth: 'auto', whiteSpace: 'nowrap'}} 
+                                              onClick={(e) => handlePagarRapido(e, p)}
+                                              title="Pagar Hoje"
+                                            >
+                                              Pagar Hoje
+                                            </button>
+                                          )}
+                                          {p.status !== 'Paga' && p.status !== 'Congelada' && (
+                                            <button 
+                                              className="btn btn-secondary" 
+                                              style={{fontSize: '10px', padding: '2px 8px', minWidth: 'auto', whiteSpace: 'nowrap'}} 
+                                              onClick={(e) => handleAdiarRapido(e, p)}
+                                              title="Adiar para o mês seguinte"
+                                            >
+                                              +1 Mês
+                                            </button>
+                                          )}
+                                          {p.status === 'Paga' && (
+                                            <button 
+                                              className="btn btn-secondary" 
+                                              style={{fontSize: '10px', padding: '2px 8px', minWidth: 'auto', whiteSpace: 'nowrap', color: 'var(--danger)'}} 
+                                              onClick={(e) => handleDesfazerRapido(e, p)}
+                                            >
+                                              Desfazer
+                                            </button>
+                                          )}
+                                          <button 
+                                            className="btn btn-secondary" 
+                                            style={{fontSize: '10px', padding: '2px 8px', minWidth: 'auto', whiteSpace: 'nowrap'}} 
+                                            onClick={(e) => { e.stopPropagation(); openModal(p, 'ajustar_valor'); setHoveredParcela(null); }}
+                                          >
+                                            Detalhes
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
                                     <div style={{fontWeight: 700, color: isCongelada ? '#94a3b8' : 'var(--secondary)', fontSize: '12px'}}>
                                       {p.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                     </div>
@@ -622,13 +844,13 @@ export default function ParcelasModule() {
                 <tr style={{backgroundColor: '#f8fafc', fontWeight: 'bold'}}>
                   <td style={{position: 'sticky', left: 0, backgroundColor: '#f8fafc', borderRight: '1px solid var(--border)', zIndex: 11, textAlign: 'right', paddingRight: '16px'}}>
                     <span style={{color: 'var(--secondary)'}}>Total Projetado:</span>
-                    <div style={{fontSize: '10px', color: 'var(--text-muted)', fontWeight: 'normal'}}>(Pendentes / Em Atraso)</div>
+                    <div style={{fontSize: '10px', color: 'var(--text-muted)', fontWeight: 'normal'}}>(Realizado + Pendentes)</div>
                   </td>
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(month => {
                     const projetadoNodes = [];
                     parcelasAgrupadas.forEach(group => {
                       group.meses[month].forEach(p => {
-                        if (!p.isGhost && p.status !== 'Paga' && p.status !== 'Congelada') projetadoNodes.push(p);
+                        if (!p.isGhost && p.status !== 'Congelada') projetadoNodes.push(p);
                       });
                     });
 
@@ -740,8 +962,9 @@ export default function ParcelasModule() {
           </table>
         </div>
       </div>
+    )}
 
-      {/* Action Modal */}
+    {/* Action Modal */}
       <div className={`modal-overlay ${modalState.isOpen ? 'active' : ''}`}>
         <div className="modal" style={{maxWidth: '400px'}}>
           <div className="modal-header">

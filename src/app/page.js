@@ -133,7 +133,27 @@ export default function Home() {
       <main className="main-content">
         <header className="header">
           <h1 id="header-title" style={{textTransform: 'capitalize'}}>{activeTab}</h1>
-          <div className="header-actions">
+          <div className="header-actions" style={{display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center'}}>
+            <button 
+              className="btn btn-primary" 
+              style={{ padding: '6px 12px', fontSize: '13px' }}
+              onClick={() => {
+                setActiveTab('contratos');
+                setTimeout(() => window.dispatchEvent(new CustomEvent('global:novoContrato')), 100);
+              }}
+            >
+              + Novo Contrato
+            </button>
+            <button 
+              className="btn btn-primary" 
+              style={{ padding: '6px 12px', fontSize: '13px' }}
+              onClick={() => {
+                setActiveTab('emissoes');
+                setTimeout(() => window.dispatchEvent(new CustomEvent('global:novaEmissao')), 100);
+              }}
+            >
+              + Emitir Nota/Boleto
+            </button>
             <button className="btn btn-secondary">Notificações <span className="badge badge-danger" style={{marginLeft: '8px'}}>0</span></button>
           </div>
         </header>

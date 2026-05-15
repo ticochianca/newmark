@@ -107,6 +107,10 @@ export default function ContratosModule() {
 
   useEffect(() => {
     fetchData();
+
+    const handleGlobalNovoContrato = () => setIsModalOpen(true);
+    window.addEventListener('global:novoContrato', handleGlobalNovoContrato);
+    return () => window.removeEventListener('global:novoContrato', handleGlobalNovoContrato);
   }, []);
 
   const handleDeleteContrato = async (id) => {
@@ -584,7 +588,6 @@ export default function ContratosModule() {
              <input type="checkbox" checked={mostrarArquivados} onChange={e => setMostrarArquivados(e.target.checked)} />
              Mostrar Arquivados
            </label>
-           <button className="btn btn-primary" onClick={() => setIsModalOpen(true)}>Novo Contrato</button>
         </div>
       </div>
 
