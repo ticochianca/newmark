@@ -1,4 +1,5 @@
 "use client";
+// v1.1 - 2026-05-15 11:16
 
 import { useState, useEffect, useMemo, Fragment } from 'react';
 import { supabase } from '@/lib/supabase';
