@@ -41,6 +41,10 @@ export default function EmissoesModule() {
   const [bulkSalvando, setBulkSalvando] = useState(false);
   const [bulkTodasParcelas, setBulkTodasParcelas] = useState([]);
 
+  // Export Lote Inter
+  const [exportModal, setExportModal] = useState(false);
+  const [exportSelecionadas, setExportSelecionadas] = useState([]);
+  const [exportando, setExportando] = useState(false);
   // Ajustar lançamentos state
   const [ajustarModal, setAjustarModal] = useState(false);
   const [ajustarParcelas, setAjustarParcelas] = useState([]);
@@ -304,8 +308,46 @@ export default function EmissoesModule() {
 
   const openBulkModal = (tipo = 'nf') => { setBulkType(tipo); setBulkModal(true); setBulkResultados([]); };
 
-  const handleExportarParcelas = () => {
-    window.open('/api/emissoes/export-parcelas', '_blank');
+  const handleAbrirExportModal = () => {
+    // Pegar todas as parcelas "pendentes" ou "atrasadas" 
+    const pendentes = parcelasFiltradas.filter(p => p.status !== 'Paga' && !isParcelaCongelada(p));
+    setExportSelecionadas(pendentes.map(p => p.id));
+    setExportModal(true);
+  };
+
+  const handleGerarExportInter = async () => {
+    if (!exportSelecionadas.length) {
+      alert('Selecione pelo menos uma parcela.');
+      return;
+    }
+    setExportando(true);
+    try {
+      const res = await fetch('/api/emissoes/export-inter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parcela_ids: exportSelecionadas })
+      });
+
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Erro ao gerar arquivo');
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Cobranca_Lote_Inter_${new Date().getTime()}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      setExportModal(false);
+    } catch (err) {
+      alert('Erro: ' + err.message);
+    } finally {
+      setExportando(false);
+    }
   };
 
   const handleImportarParcelas = async (file) => {
@@ -1064,8 +1106,8 @@ export default function EmissoesModule() {
       {/* Header */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
         <h2 style={{ marginRight: 'auto', color: 'var(--secondary)', fontSize: '18px' }}>Controle de Emissões</h2>
-        <button className="btn btn-secondary" style={{ fontSize: '13px' }} onClick={handleExportarParcelas}>
-          ⬇ Exportar Pendentes
+        <button className="btn btn-secondary" style={{ fontSize: '13px', backgroundColor: '#f97316', borderColor: '#ea580c', color: '#fff' }} onClick={handleAbrirExportModal}>
+          ⬇ Exportar Lote Inter (Excel)
         </button>
         <label className="btn btn-secondary" style={{ fontSize: '13px', cursor: 'pointer', marginBottom: 0 }}>
           {importando ? 'Importando...' : '⬆ Importar Preenchido'}
@@ -1941,6 +1983,95 @@ export default function EmissoesModule() {
           </div>
         </div>
       </div>
+
+      {/* Export Inter Modal */}
+      {exportModal && (
+        <div className="modal-overlay active" style={{ zIndex: 1000 }}>
+          <div className="modal" style={{ maxWidth: '600px', width: '90%' }}>
+            <div className="modal-header">
+              <h2>Exportar Lote Banco Inter</h2>
+              <button className="close-modal" onClick={() => setExportModal(false)}>&times;</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                Selecione as parcelas que deseja incluir na planilha de emissão em lote do Banco Inter.
+              </p>
+              
+              <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '8px', marginBottom: '16px' }}>
+                <table className="nm-table" style={{ margin: 0, fontSize: '12px' }}>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
+                    <tr>
+                      <th style={{ width: '40px', textAlign: 'center' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={exportSelecionadas.length > 0 && exportSelecionadas.length === parcelasFiltradas.filter(p => p.status !== 'Paga' && !isParcelaCongelada(p)).length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setExportSelecionadas(parcelasFiltradas.filter(p => p.status !== 'Paga' && !isParcelaCongelada(p)).map(p => p.id));
+                            } else {
+                              setExportSelecionadas([]);
+                            }
+                          }}
+                        />
+                      </th>
+                      <th>Cliente</th>
+                      <th>Competência</th>
+                      <th style={{ textAlign: 'center' }}>Vencimento</th>
+                      <th style={{ textAlign: 'right' }}>Valor</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parcelasFiltradas.filter(p => p.status !== 'Paga' && !isParcelaCongelada(p)).map(p => {
+                      const cli = p.contratos?.clientes;
+                      const isOverdueParc = isOverdue(p);
+                      return (
+                        <tr key={p.id}>
+                          <td style={{ textAlign: 'center' }}>
+                            <input 
+                              type="checkbox" 
+                              checked={exportSelecionadas.includes(p.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) setExportSelecionadas([...exportSelecionadas, p.id]);
+                                else setExportSelecionadas(exportSelecionadas.filter(id => id !== p.id));
+                              }}
+                            />
+                          </td>
+                          <td style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                            {cli?.apelido || cli?.nome}
+                          </td>
+                          <td>{getMesPrestacao(p)}</td>
+                          <td style={{ textAlign: 'center' }}>
+                            {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                            {isOverdueParc && <div style={{ fontSize: '9px', color: '#ef4444', fontWeight: 700 }}>EM ATRASO</div>}
+                          </td>
+                          <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                            R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {parcelasFiltradas.filter(p => p.status !== 'Paga' && !isParcelaCongelada(p)).length === 0 && (
+                      <tr><td colSpan="5" style={{ textAlign: 'center', padding: '24px' }}>Nenhuma parcela pendente.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '13px', fontWeight: 600 }}>
+                  {exportSelecionadas.length} parcela(s) selecionada(s)
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="btn btn-secondary" onClick={() => setExportModal(false)}>Cancelar</button>
+                  <button className="btn btn-primary" onClick={handleGerarExportInter} disabled={exportando || exportSelecionadas.length === 0}>
+                    {exportando ? 'Gerando...' : 'Gerar Planilha Inter'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
     </section>
   );
