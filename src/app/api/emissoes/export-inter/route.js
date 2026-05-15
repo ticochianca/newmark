@@ -38,7 +38,7 @@ export async function POST(req) {
     }
 
     // Read the template
-    const templatePath = path.join(process.cwd(), 'src', 'lib', 'Template_Inter.xlsx');
+    const templatePath = path.join(process.cwd(), 'public', 'Template_Inter.xlsx');
     const wb = xlsx.readFile(templatePath);
     const sheetName = 'Cobrança Simples'; // As we saw from previous logs
     const sheet = wb.Sheets[sheetName];
