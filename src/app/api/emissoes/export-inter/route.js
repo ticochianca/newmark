@@ -80,7 +80,7 @@ export async function POST(req) {
         'Sim', // 14. Boleto com PIX
         'Boleto', // 15. Forma de Pagamento
         Number(p.valor), // 16. Valor
-        String(index + 1).padStart(10, '0'), // 17. Código (ID numérico curto)
+        p.nf_numero || String(index + 1).padStart(10, '0'), // 17. Código da cobrança (Usa NF se existir)
         `${p.contratos?.titulo || ''} - Comp: ${getMesPrestacao(p)}`.slice(0, 100), // 18. Descrição
         vencStr, // 19. Data Vencimento
         'Sim', // 20. Pagamento após vencimento
