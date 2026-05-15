@@ -51,32 +51,37 @@ export async function POST(req) {
     const newRows = rows.slice(0, 3);
 
     // Append our data
-    for (const p of parcelas) {
+    parcelas.forEach((p, index) => {
       const cli = p.contratos?.clientes || {};
       const cnpj = (cli.cnpj || '').replace(/\D/g, '');
       const vencDate = new Date(p.data_vencimento + 'T12:00:00');
-      const vencStr = `${String(vencDate.getDate()).padStart(2, '0')}/${String(vencDate.getMonth()+1).padStart(2, '0')}/${vencDate.getFullYear()}`;
+      // Inter manual shows DD-MM-YYYY in examples
+      const vencStr = `${String(vencDate.getDate()).padStart(2, '0')}-${String(vencDate.getMonth()+1).padStart(2, '0')}-${vencDate.getFullYear()}`;
+      
+      // Formata CEP com hífen
+      let cep = (cli.cep || '00000000').replace(/\D/g, '');
+      if (cep.length === 8) cep = cep.slice(0, 5) + '-' + cep.slice(5);
 
       const row = [
         cli.nome || cli.apelido || 'Cliente Não Identificado', // 0. Nome
         cnpj || '00000000000', // 1. CPF/CNPJ
         cli.email_cobranca || '', // 2. Email
-        cli.telefone || '', // 3. Telefone
+        (cli.telefone || '').replace(/\D/g, ''), // 3. Telefone
         cli.endereco || 'Não informado', // 4. Endereço
         cli.numero_endereco || 'S/N', // 5. Número
         cli.complemento_endereco || '', // 6. Complemento
         cli.bairro || 'Não informado', // 7. Bairro
         cli.cidade || 'Não informado', // 8. Cidade
         cli.estado || 'SP', // 9. Estado
-        cli.cep || '00000000', // 10. CEP
+        cep, // 10. CEP
         'Não', // 11. Beneficiário final
         '', // 12
         '', // 13
         'Sim', // 14. Boleto com PIX
         'Boleto', // 15. Forma de Pagamento
         Number(p.valor), // 16. Valor
-        p.id, // 17. Código da cobrança
-        `${p.contratos?.titulo || ''} - Comp: ${getMesPrestacao(p)}`, // 18. Descrição
+        String(index + 1).padStart(10, '0'), // 17. Código (ID numérico curto)
+        `${p.contratos?.titulo || ''} - Comp: ${getMesPrestacao(p)}`.slice(0, 100), // 18. Descrição
         vencStr, // 19. Data Vencimento
         'Sim', // 20. Pagamento após vencimento
         30, // 21. Prazo limite pagamento
@@ -86,12 +91,12 @@ export async function POST(req) {
         0, // 25. Juros
         'Não aplicar desconto', // 26. Desconto antecipação
         0, // 27. Desconto
-        '', // 28. Prazo desconto
+        0, // 28. Prazo desconto (usar 0)
         'Não', // 29. NF
         '', '', '', '', '', '' // 30-35. NF Details
       ];
       newRows.push(row);
-    }
+    });
 
     // Replace the sheet data
     const newSheet = xlsx.utils.aoa_to_sheet(newRows);
