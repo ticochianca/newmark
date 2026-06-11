@@ -1028,9 +1028,10 @@ export default function EmissoesModule() {
     }
 
     if (todasAtrasadas.length > 0) {
-      const itens = todasAtrasadas.map(p =>
-        `• ${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`
-      ).join('\n');
+      const itens = todasAtrasadas.map(p => {
+        const nfPart = p.nf_numero ? `NF ${p.nf_numero} — ` : '';
+        return `• ${nfPart}${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`;
+      }).join('\n');
       parts.push(`⚠️ Identificamos parcela(s) em atraso:\n${itens}${FOOTER_COBRANCA}`);
     }
 
