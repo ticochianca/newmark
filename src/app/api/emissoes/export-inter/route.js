@@ -29,7 +29,7 @@ export async function POST(req) {
     // Fetch the parcels
     const { data: parcelas, error } = await supabaseAdmin
       .from('parcelas')
-      .select('*, contratos(id, titulo, cobranca_mesmo_mes, clientes(id, nome, apelido, cnpj, email_cobranca, endereco, numero_endereco, complemento_endereco, bairro, cidade, estado, cep, telefone))')
+      .select('*, contratos(id, titulo, cobranca_mesmo_mes, percentual_retencao, clientes(id, nome, apelido, cnpj, email_cobranca, endereco, numero_endereco, complemento_endereco, bairro, cidade, estado, cep, telefone))')
       .in('id', parcela_ids)
       .order('data_vencimento');
 
@@ -42,7 +42,7 @@ export async function POST(req) {
     const wb = xlsx.read(Buffer.from(templateInterBase64, 'base64'), { type: 'buffer' });
     const sheetName = 'Cobrança Simples'; // As we saw from previous logs
     const sheet = wb.Sheets[sheetName];
-    
+
     // Convert to array of arrays
     const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
@@ -56,8 +56,8 @@ export async function POST(req) {
       const cnpj = (cli.cnpj || '').replace(/\D/g, '');
       const vencDate = new Date(p.data_vencimento + 'T12:00:00');
       // Inter manual shows DD-MM-YYYY in examples
-      const vencStr = `${String(vencDate.getDate()).padStart(2, '0')}-${String(vencDate.getMonth()+1).padStart(2, '0')}-${vencDate.getFullYear()}`;
-      
+      const vencStr = `${String(vencDate.getDate()).padStart(2, '0')}-${String(vencDate.getMonth() + 1).padStart(2, '0')}-${vencDate.getFullYear()}`;
+
       // Formata CEP com hífen
       let cep = (cli.cep || '00000000').replace(/\D/g, '');
       if (cep.length === 8) cep = cep.slice(0, 5) + '-' + cep.slice(5);
@@ -65,7 +65,7 @@ export async function POST(req) {
       const row = [
         cli.nome || cli.apelido || 'Cliente Não Identificado', // 0. Nome
         cnpj || '00000000000', // 1. CPF/CNPJ
-        cli.email_cobranca || '', // 2. Email
+        (cli.email_cobranca || '').split(/[;,]/)[0].trim(), // 2. Email (apenas o primeiro)
         (cli.telefone || '').replace(/\D/g, ''), // 3. Telefone
         cli.endereco || 'Não informado', // 4. Endereço
         cli.numero_endereco || 'S/N', // 5. Número
@@ -79,7 +79,7 @@ export async function POST(req) {
         '', // 13
         'Sim', // 14. Boleto com PIX
         'Boleto', // 15. Forma de Pagamento
-        Number(p.valor), // 16. Valor
+        Number((p.valor * (1 - (p.contratos?.percentual_retencao || 0) / 100)).toFixed(2)), // 16. Valor (NF - retido)
         p.nf_numero || String(index + 1).padStart(10, '0'), // 17. Código da cobrança (Usa NF se existir)
         `${p.contratos?.titulo || ''} - Comp: ${getMesPrestacao(p)}`.slice(0, 100), // 18. Descrição
         vencStr, // 19. Data Vencimento
