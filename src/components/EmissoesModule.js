@@ -908,6 +908,7 @@ export default function EmissoesModule() {
     // Exclude parcelas that are already in the group (already shown in period section)
     const atrasadas = (atrasadasRaw || []).filter(p => !groupIds.has(p.id));
     setEmailAtrasadas(atrasadas);
+    setEmailAtrasadasIncluidas(atrasadas.map(p => p.id)); // Auto-seleciona todas as atrasadas
 
     setLoadingEmailModal(false);
   };
@@ -998,32 +999,59 @@ export default function EmissoesModule() {
     const atrasadasDoEmail = emailAtrasadas.filter(p => emailAtrasadasIncluidas.includes(p.id));
     const parts = [];
 
-    const byContrato = {};
-    parcelasDoEmail.forEach(p => {
-      if (!byContrato[p.contrato_id]) byContrato[p.contrato_id] = [];
-      byContrato[p.contrato_id].push(p);
-    });
+    const fmtValor = (p) => `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+    const fmtVenc  = (p) => p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '';
 
-    Object.entries(byContrato).forEach(([cId, cParcelas]) => {
-      const template = emailMensagensContratos[cId];
-      cParcelas.forEach(p => {
-        if (template) {
-          const resolved = resolveTemplate(template, p);
-          if (resolved) parts.push(resolved);
+    if (parcelasDoEmail.length === 1) {
+      // Parcela única: usa o template inteiro resolvido normalmente
+      const p = parcelasDoEmail[0];
+      const template = emailMensagensContratos[p.contrato_id];
+      if (template) {
+        const resolved = resolveTemplate(template, p);
+        if (resolved) parts.push(resolved);
+      } else {
+        parts.push(`${p.contratos?.titulo || 'Contrato'} — ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`);
+      }
+    } else if (parcelasDoEmail.length > 1) {
+      // Múltiplas parcelas: lista consolidada no lugar das linhas com variáveis de NF
+      const NF_VARS = /\{nf\}|\{boleto\}|\{competencia\}|\{vencimento\}|\{valor\}|\{contrato\}/i;
+
+      const bullets = parcelasDoEmail.map(p => {
+        const nfPart = p.nf_numero ? `NF ${p.nf_numero} — ` : '';
+        return `• ${nfPart}${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`;
+      }).join('\n');
+
+      const firstP = parcelasDoEmail[0];
+      const template = parcelasDoEmail.map(p => emailMensagensContratos[p.contrato_id]).find(Boolean);
+
+      if (template) {
+        const lines = template.split('\n');
+        let firstNFLine = -1, lastNFLine = -1;
+        lines.forEach((l, i) => { if (NF_VARS.test(l)) { if (firstNFLine === -1) firstNFLine = i; lastNFLine = i; } });
+
+        const resolveCommon = (l) => l.replace(/\{cliente\}/gi, firstP.contratos?.clientes?.apelido || firstP.contratos?.clientes?.nome || '');
+
+        if (firstNFLine === -1) {
+          // Template sem variáveis de NF: adiciona lista após o conteúdo do template
+          parts.push(resolveCommon(template) + '\n\n' + bullets);
         } else {
-          const valor = `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-          const venc  = p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '';
-          parts.push(`${p.contratos?.titulo || 'Contrato'} — ${getMesPrestacaoLong(p)} — ${valor} (venc. ${venc})`);
+          const resultLines = [];
+          for (let i = 0; i < lines.length; i++) {
+            if (i === firstNFLine) resultLines.push(bullets);
+            else if (i > firstNFLine && i <= lastNFLine) { /* skip NF lines já substituídas */ }
+            else resultLines.push(resolveCommon(lines[i]));
+          }
+          parts.push(resultLines.join('\n'));
         }
-      });
-    });
+      } else {
+        parts.push(bullets);
+      }
+    }
 
     if (atrasadasDoEmail.length > 0) {
-      const itens = atrasadasDoEmail.map(p => {
-        const valor = `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-        const venc  = p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '';
-        return `• ${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${valor} (venc. ${venc})`;
-      }).join('\n');
+      const itens = atrasadasDoEmail.map(p =>
+        `• ${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`
+      ).join('\n');
       parts.push(`⚠️ Identificamos parcela(s) em atraso:\n${itens}${FOOTER_COBRANCA}`);
     }
 
