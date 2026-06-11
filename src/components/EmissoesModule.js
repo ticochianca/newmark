@@ -1013,39 +1013,12 @@ export default function EmissoesModule() {
         parts.push(`${p.contratos?.titulo || 'Contrato'} — ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`);
       }
     } else if (parcelasDoEmail.length > 1) {
-      // Múltiplas parcelas: lista consolidada no lugar das linhas com variáveis de NF
-      const NF_VARS = /\{nf\}|\{boleto\}|\{competencia\}|\{vencimento\}|\{valor\}|\{contrato\}/i;
-
+      // Múltiplas parcelas: formato fixo com lista de NFs
       const bullets = parcelasDoEmail.map(p => {
         const nfPart = p.nf_numero ? `NF ${p.nf_numero} — ` : '';
         return `• ${nfPart}${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`;
       }).join('\n');
-
-      const firstP = parcelasDoEmail[0];
-      const template = parcelasDoEmail.map(p => emailMensagensContratos[p.contrato_id]).find(Boolean);
-
-      if (template) {
-        const lines = template.split('\n');
-        let firstNFLine = -1, lastNFLine = -1;
-        lines.forEach((l, i) => { if (NF_VARS.test(l)) { if (firstNFLine === -1) firstNFLine = i; lastNFLine = i; } });
-
-        const resolveCommon = (l) => l.replace(/\{cliente\}/gi, firstP.contratos?.clientes?.apelido || firstP.contratos?.clientes?.nome || '');
-
-        if (firstNFLine === -1) {
-          // Template sem variáveis de NF: adiciona lista após o conteúdo do template
-          parts.push(resolveCommon(template) + '\n\n' + bullets);
-        } else {
-          const resultLines = [];
-          for (let i = 0; i < lines.length; i++) {
-            if (i === firstNFLine) resultLines.push(bullets);
-            else if (i > firstNFLine && i <= lastNFLine) { /* skip NF lines já substituídas */ }
-            else resultLines.push(resolveCommon(lines[i]));
-          }
-          parts.push(resultLines.join('\n'));
-        }
-      } else {
-        parts.push(bullets);
-      }
+      parts.push(`Prezados,\n\nSeguem as NFs:\n${bullets}`);
     }
 
     if (atrasadasDoEmail.length > 0) {
