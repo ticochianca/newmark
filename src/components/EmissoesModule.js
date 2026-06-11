@@ -996,15 +996,21 @@ export default function EmissoesModule() {
     if (loadingEmailModal || !emailModal.open) return '';
 
     const parcelasDoEmail = emailModal.parcelas.filter(p => emailParcelasIncluidas.includes(p.id));
-    const atrasadasDoEmail = emailAtrasadas.filter(p => emailAtrasadasIncluidas.includes(p.id));
     const parts = [];
 
     const fmtValor = (p) => `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
     const fmtVenc  = (p) => p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '';
 
-    if (parcelasDoEmail.length === 1) {
-      // Parcela única: usa o template inteiro resolvido normalmente
-      const p = parcelasDoEmail[0];
+    // Separa parcelas do grupo em atuais e atrasadas
+    const parcelasAtuais   = parcelasDoEmail.filter(p => !isOverdue(p));
+    const atrasadasDoGrupo = parcelasDoEmail.filter(p => isOverdue(p));
+    // Atrasadas externas (de outros contratos/períodos) selecionadas manualmente
+    const atrasadasExternas = emailAtrasadas.filter(p => emailAtrasadasIncluidas.includes(p.id));
+    const todasAtrasadas = [...atrasadasDoGrupo, ...atrasadasExternas];
+
+    if (parcelasAtuais.length === 1) {
+      // Parcela atual única: usa o template inteiro resolvido normalmente
+      const p = parcelasAtuais[0];
       const template = emailMensagensContratos[p.contrato_id];
       if (template) {
         const resolved = resolveTemplate(template, p);
@@ -1012,17 +1018,17 @@ export default function EmissoesModule() {
       } else {
         parts.push(`${p.contratos?.titulo || 'Contrato'} — ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`);
       }
-    } else if (parcelasDoEmail.length > 1) {
-      // Múltiplas parcelas: formato fixo com lista de NFs
-      const bullets = parcelasDoEmail.map(p => {
+    } else if (parcelasAtuais.length > 1) {
+      // Múltiplas parcelas atuais: formato fixo com lista
+      const bullets = parcelasAtuais.map(p => {
         const nfPart = p.nf_numero ? `NF ${p.nf_numero} — ` : '';
         return `• ${nfPart}${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`;
       }).join('\n');
       parts.push(`Prezados,\n\nSeguem as NFs:\n${bullets}`);
     }
 
-    if (atrasadasDoEmail.length > 0) {
-      const itens = atrasadasDoEmail.map(p =>
+    if (todasAtrasadas.length > 0) {
+      const itens = todasAtrasadas.map(p =>
         `• ${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`
       ).join('\n');
       parts.push(`⚠️ Identificamos parcela(s) em atraso:\n${itens}${FOOTER_COBRANCA}`);
