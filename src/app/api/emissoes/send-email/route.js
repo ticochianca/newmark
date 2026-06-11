@@ -60,6 +60,7 @@ export async function POST(request) {
     const { error: sendError } = await resend.emails.send({
       from: 'Newmark Financeiro <financeiro@newmark.com.br>',
       to: destinatarios,
+      bcc: ['financeiro@newmark.com.br'],
       subject: assunto,
       html: corpoHtml,
       ...(attachments.length > 0 && { attachments }),
