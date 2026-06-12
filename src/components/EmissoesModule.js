@@ -970,7 +970,7 @@ export default function EmissoesModule() {
         const comp  = getMesPrestacaoLong(p);
         const valor = `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
         const venc  = p.data_vencimento ? new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : '';
-        return `• ${p.contratos?.titulo || 'Contrato'} — ref. ${comp} — ${valor} (venc. ${venc})`;
+        return `• ${p.contratos?.titulo || 'Contrato'} — ref. aos serviços prestados em ${comp} — ${valor} (venc. ${venc})`;
       }).join('\n');
       parts.push(`⚠️ Identificamos parcela(s) em atraso:\n${itens}${FOOTER_COBRANCA}`);
     }
@@ -1022,7 +1022,7 @@ export default function EmissoesModule() {
       // Múltiplas parcelas atuais: formato fixo com lista
       const bullets = parcelasAtuais.map(p => {
         const nfPart = p.nf_numero ? `NF ${p.nf_numero} — ` : '';
-        return `• ${nfPart}${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`;
+        return `• ${nfPart}${p.contratos?.titulo || 'Contrato'} — ref. aos serviços prestados em ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`;
       }).join('\n');
       parts.push(`Prezados,\n\nSeguem as NFs:\n${bullets}`);
     }
@@ -1030,7 +1030,7 @@ export default function EmissoesModule() {
     if (todasAtrasadas.length > 0) {
       const itens = todasAtrasadas.map(p => {
         const nfPart = p.nf_numero ? `NF ${p.nf_numero} — ` : '';
-        return `• ${nfPart}${p.contratos?.titulo || 'Contrato'} — ref. ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`;
+        return `• ${nfPart}${p.contratos?.titulo || 'Contrato'} — ref. aos serviços prestados em ${getMesPrestacaoLong(p)} — ${fmtValor(p)} (venc. ${fmtVenc(p)})`;
       }).join('\n');
       parts.push(`⚠️ Identificamos parcela(s) em atraso:\n${itens}${FOOTER_COBRANCA}`);
     }
