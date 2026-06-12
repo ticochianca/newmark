@@ -47,7 +47,13 @@ export async function POST(request) {
           <img src="https://newmark-app.vercel.app/logo.png" alt="Newmark" style="height:36px;" />
         </div>
         <div style="padding:0 28px 28px;">
-          <p style="white-space:pre-wrap;margin:0 0 16px;">${mensagem.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
+          <div style="margin:0 0 16px;">${
+            mensagem
+              .replace(/</g, '&lt;').replace(/>/g, '&gt;')
+              .split(/\n---\n/)
+              .map(bloco => bloco.trim().split('\n').map(l => l === '' ? '<br>' : `<span>${l}</span><br>`).join(''))
+              .join('<hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0;">')
+          }</div>
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:28px 0 16px;" />
           <p style="font-size:12px;color:#94a3b8;margin:0;">
             Este e-mail foi enviado automaticamente pela plataforma Newmark.<br/>
