@@ -80,7 +80,7 @@ export async function POST(request) {
     if (parcelaIds && parcelaIds.length > 0) {
       await supabaseAdmin
         .from('parcelas')
-        .update({ email_enviado: true })
+        .update({ email_enviado: true, email_enviado_em: new Date().toISOString() })
         .in('id', parcelaIds);
     }
 

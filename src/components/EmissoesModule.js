@@ -1267,8 +1267,15 @@ export default function EmissoesModule() {
                           </td>
                           <td style={{ textAlign: 'center' }}>
                             {p.email_enviado
-                              ? <span style={{ fontSize: '11px', fontWeight: 600, color: '#10b981', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '4px', padding: '1px 8px' }}>Enviado</span>
-                              : <span style={{ fontSize: '11px', color: '#94a3b8', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1px 8px' }}>Em breve</span>
+                              ? <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', fontSize: '11px', fontWeight: 600, color: '#10b981', backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '4px', padding: '2px 8px', lineHeight: 1.3 }}>
+                                  <span>Enviado</span>
+                                  {p.email_enviado_em && (
+                                    <span style={{ fontWeight: 400, color: '#6ee7b7', fontSize: '10px' }}>
+                                      {new Date(p.email_enviado_em).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'America/Sao_Paulo' })}
+                                    </span>
+                                  )}
+                                </span>
+                              : <span style={{ fontSize: '11px', color: '#94a3b8', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '1px 8px' }}>—</span>
                             }
                           </td>
                           <td style={{ textAlign: 'right', padding: '8px 16px' }}>
