@@ -384,7 +384,16 @@ export default function EmissoesModule() {
     const vParsed = parseFloat((parsed.valor || '').replace(/\./g, '').replace(',', '.'));
     const vParc = Number(parcela.valor);
     if (vParsed > 0) {
-      confs.push({ label: 'Valor', ok: Math.abs(vParsed - vParc) < 0.01, parsed: vParsed, expected: vParc });
+      const retPct = parcela?.contratos?.percentual_retencao || 0;
+      const okGross   = Math.abs(vParsed - vParc) < 0.01;
+      const okLiquido = retPct > 0 && Math.abs(vParsed - vParc * (1 - retPct / 100)) < 0.05;
+      confs.push({
+        label: 'Valor',
+        ok: okGross || okLiquido,
+        parsed: vParsed,
+        expected: vParc,
+        obs: okLiquido ? `retenção ${retPct}%` : null,
+      });
     }
 
     // Vencimento (Boleto)
@@ -738,6 +747,12 @@ export default function EmissoesModule() {
     if (result.numero) setFormNF(prev => ({ ...prev, numero: result.numero }));
     setParseResultNF(result);
     salvarEnderecoCliente(result, modal.parcela);
+    // Auto-detect ISSQN retention and update modalRetencao
+    if (result.retencao_issqn && result.valor) {
+      const vServ = parseFloat(result.valor.replace(/\./g, '').replace(',', '.'));
+      const vRet  = parseFloat(result.retencao_issqn.replace(/\./g, '').replace(',', '.'));
+      if (vServ > 0 && vRet > 0) setModalRetencao(parseFloat(((vRet / vServ) * 100).toFixed(4)));
+    }
   };
 
   const handleBoletoFileChange = async (file) => {
@@ -863,6 +878,11 @@ export default function EmissoesModule() {
         setParseResultNF(rNF.error ? { erro: rNF.error } : rNF);
         salvarEnderecoCliente(rNF, modal.parcela);
         finalNF = rNF;
+        if (rNF.retencao_issqn && rNF.valor) {
+          const vServ = parseFloat(rNF.valor.replace(/\./g, '').replace(',', '.'));
+          const vRet  = parseFloat(rNF.retencao_issqn.replace(/\./g, '').replace(',', '.'));
+          if (vServ > 0 && vRet > 0) setModalRetencao(parseFloat(((vRet / vServ) * 100).toFixed(4)));
+        }
       } else {
         setFormBoleto(prev => ({ ...prev, file, vencimento: rBol.vencimento || prev.vencimento }));
         setParseResultBoleto(rBol.error ? { erro: rBol.error } : rBol);
@@ -1450,6 +1470,18 @@ export default function EmissoesModule() {
                           {parseResultNF.cliente  && <div><strong>Cliente:</strong> {parseResultNF.cliente}</div>}
                           {parseResultNF.descricao && <div><strong>Serviço:</strong> {parseResultNF.descricao.substring(0, 150)}{parseResultNF.descricao.length > 150 ? '…' : ''}</div>}
                           {parseResultNF.valor    && <div><strong>Valor:</strong> {parseResultNF.valor}</div>}
+                          {parseResultNF.retencao_issqn && (
+                            <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '11px', color: '#0369a1', backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: '4px', padding: '2px 8px', fontWeight: 700 }}>
+                                💧 ISSQN retido: R$ {parseResultNF.retencao_issqn}
+                              </span>
+                              {parseResultNF.valor_liquido && (
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                  Boleto esperado: <strong>R$ {parseResultNF.valor_liquido}</strong>
+                                </span>
+                              )}
+                            </div>
+                          )}
                           {!parseResultNF.numero && !parseResultNF.cliente && !parseResultNF.descricao && (
                             <div style={{ color: '#d97706' }}>Nenhum campo reconhecido.</div>
                           )}
@@ -1747,6 +1779,12 @@ export default function EmissoesModule() {
                           </td>
                           <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
                             {r.parsed.valor ? `R$ ${r.parsed.valor}` : '—'}
+                            {bulkType === 'nf' && r.parsed.retencao_issqn && (
+                              <div style={{ fontSize: '9px', color: '#0369a1', fontWeight: 600, marginTop: '2px' }}>
+                                💧 retido R$ {r.parsed.retencao_issqn}
+                                {r.parsed.valor_liquido && ` → liq. R$ ${r.parsed.valor_liquido}`}
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '8px 10px', textAlign: 'center' }}>
                             {r.status === 'pronto'        && <span style={{ color: '#10b981', fontWeight: 700 }}>✅</span>}

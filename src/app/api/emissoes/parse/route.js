@@ -90,6 +90,32 @@ function extractNFDescricao(lines) {
     || null;
 }
 
+function extractNFRetencaoISSQN(lines) {
+  const parseM = (str) => { if (!str) return null; const m = str.match(/R?\$?\s*([\d.]+,\d{2})/); return m ? m[1] : null; };
+  // "ISSQN Retido" / "Retenção do ISSQN" / "Retido pelo Tomador" — value on next line or same line
+  const res = nextLineAfter(lines, /ISSQN\s*Retid[ao]/i)
+    || nextLineAfter(lines, /Reten[çc][aã]o\s*do\s*ISSQN/i)
+    || nextLineAfter(lines, /ISSQN\s*retido\s*pelo\s*tomador/i);
+  if (res?.value) { const p = parseM(res.value); if (p) return p; }
+  for (const line of lines) {
+    if (/ISSQN\s*Retid[ao]/i.test(line) || /Reten[çc][aã]o\s*do\s*ISSQN/i.test(line)) {
+      const p = parseM(line); if (p) return p;
+    }
+  }
+  return null;
+}
+
+function extractNFValorLiquido(lines) {
+  const parseM = (str) => { if (!str) return null; const m = str.match(/R?\$?\s*([\d.]+,\d{2})/); return m ? m[1] : null; };
+  const res = nextLineAfter(lines, /valor\s*l[íi]quido\s*da\s*NFS?-?e/i)
+    || nextLineAfter(lines, /valor\s*l[íi]quido/i);
+  if (res?.value) { const p = parseM(res.value); if (p) return p; }
+  for (const line of lines) {
+    if (/valor\s*l[íi]quido/i.test(line)) { const p = parseM(line); if (p) return p; }
+  }
+  return null;
+}
+
 function extractNFValor(lines) {
   const parseMonetary = (str) => {
     if (!str) return null;
@@ -272,10 +298,12 @@ export async function POST(request) {
     if (tipo === 'nf') {
       const tomador = extractNFTomador(lines);
       const result = {
-        numero:    extractNFNumero(lines),
-        cliente:   extractNFCliente(lines),
-        descricao: extractNFDescricao(lines),
-        valor:     extractNFValor(lines),
+        numero:         extractNFNumero(lines),
+        cliente:        extractNFCliente(lines),
+        descricao:      extractNFDescricao(lines),
+        valor:          extractNFValor(lines),
+        retencao_issqn: extractNFRetencaoISSQN(lines),
+        valor_liquido:  extractNFValorLiquido(lines),
         ...tomador,
       };
       // Include raw lines for diagnosis when nothing was found
