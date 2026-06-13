@@ -422,15 +422,30 @@ export default function EmissoesModule() {
           return pCnpj && pCnpj.startsWith(cnpjDigits.slice(0, 8));
         });
       }
-      // fallback: nome do cliente ou pagador
+      // fallback: nome do cliente ou pagador com scoring por palavras
       const nomeBusca = bulkType === 'nf' ? parsed.cliente : parsed.pagador;
       if (parcelasDoCliente.length === 0 && nomeBusca) {
-        const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const nomeNF = norm(nomeBusca);
-        parcelasDoCliente = (todasParcelas || []).filter(p => {
-          const pNome = norm(p.contratos?.clientes?.nome || '');
-          return pNome.length > 4 && (pNome.includes(nomeNF.slice(0, 8)) || nomeNF.includes(pNome.slice(0, 8)));
-        });
+        const normNome = s => (s || '').toLowerCase()
+          .normalize('NFD').replace(/[̀-ͯ]/g, '')
+          .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        const STOP = new Set(['ltda','eireli','eireili','epp','mei','soc','com','ltd','dos','das','des','del','sua','cia','spa']);
+        const palavras = s => normNome(s).split(' ').filter(w => w.length > 2 && !STOP.has(w));
+        const scoreNome = (pdf, dbNome, dbApelido) => {
+          const pw = palavras(pdf);
+          if (!pw.length) return 0;
+          const dw = [...palavras(dbNome), ...palavras(dbApelido)];
+          return pw.filter(w => dw.some(d => d.includes(w) || w.includes(d))).length / pw.length;
+        };
+
+        const scored = (todasParcelas || [])
+          .map(p => ({ p, score: scoreNome(nomeBusca, p.contratos?.clientes?.nome, p.contratos?.clientes?.apelido) }))
+          .filter(({ score }) => score >= 0.35)
+          .sort((a, b) => b.score - a.score);
+
+        if (scored.length > 0) {
+          const bestClienteId = scored[0].p.contratos?.clientes?.id;
+          parcelasDoCliente = scored.filter(({ p }) => p.contratos?.clientes?.id === bestClienteId).map(({ p }) => p);
+        }
       }
 
       const clienteMatch = parcelasDoCliente[0]?.contratos?.clientes || null;
@@ -441,15 +456,16 @@ export default function EmissoesModule() {
         ? parcelasDoCliente.find(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
         : null;
 
-      // NOVO: Se for boleto, tenta casar o "numeroDocumento" do boleto com o "nf_numero" da parcela
+      // Para boleto: casar pelo número do documento (NF)
       if (bulkType === 'boleto' && parsed.numeroDocumento) {
         const matchPorNF = (todasParcelas || []).find(p => p.nf_numero === parsed.numeroDocumento);
-        if (matchPorNF) {
-          parcelaSugerida = matchPorNF;
-        }
+        if (matchPorNF) parcelaSugerida = matchPorNF;
       }
 
-      if (!parcelaSugerida && parcelasDoCliente.length === 1) parcelaSugerida = parcelasDoCliente[0];
+      // Fallback: parcela mais próxima por data de vencimento
+      if (!parcelaSugerida && parcelasDoCliente.length > 0) {
+        parcelaSugerida = [...parcelasDoCliente].sort((a, b) => new Date(a.data_vencimento) - new Date(b.data_vencimento))[0];
+      }
 
       resultados.push({
         file,
@@ -503,13 +519,18 @@ export default function EmissoesModule() {
         if (matchPorNF) parcelaSugerida = matchPorNF;
       }
 
-      const { conferencias, status } = runConferencias(r.parsed, parcelaSugerida || (parcelasDoCliente.length === 1 ? parcelasDoCliente[0] : null), bulkType);
+      // Fallback: parcela mais próxima por data de vencimento
+      if (!parcelaSugerida && parcelasDoCliente.length > 0) {
+        parcelaSugerida = [...parcelasDoCliente].sort((a, b) => new Date(a.data_vencimento) - new Date(b.data_vencimento))[0];
+      }
+
+      const { conferencias, status } = runConferencias(r.parsed, parcelaSugerida, bulkType);
 
       return {
         ...r,
         clienteMatch,
         parcelasDoCliente,
-        parcelaSelecionada: parcelaSugerida || (parcelasDoCliente.length === 1 ? parcelasDoCliente[0] : null),
+        parcelaSelecionada: parcelaSugerida || null,
         conferencias,
         status: !clienteMatch ? 'nao_encontrado' : status,
       };
