@@ -113,6 +113,13 @@ export default function ContratosModule() {
     return () => window.removeEventListener('global:novoContrato', handleGlobalNovoContrato);
   }, []);
 
+  const handleEncerrarContrato = async (id, titulo) => {
+    if (!confirm(`Encerrar o contrato "${titulo}"?\n\nEle será arquivado e ficará oculto da lista principal. As parcelas em aberto continuarão visíveis em Parcelas e Emissões.`)) return;
+    const { error } = await supabase.from('contratos').update({ arquivado: true }).eq('id', id);
+    if (error) alert('Erro ao encerrar: ' + error.message);
+    else fetchData();
+  };
+
   const handleDeleteContrato = async (id) => {
     if(confirm("Tem certeza que deseja excluir este contrato? Todas as parcelas associadas serão apagadas definitivamente!")) {
       const { error } = await supabase.from('contratos').delete().eq('id', id);
@@ -708,6 +715,16 @@ export default function ContratosModule() {
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                       </button>
+                      {!c.arquivado && (
+                        <button
+                          className="btn btn-secondary"
+                          style={{padding: '6px 8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#92400e', borderColor: '#fde68a', backgroundColor: '#fffbeb'}}
+                          onClick={() => handleEncerrarContrato(c.id, c.titulo)}
+                          title="Encerrar / Arquivar Contrato"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
+                        </button>
+                      )}
                       <button
                         className="btn btn-secondary"
                         style={{color: 'var(--danger)', padding: '6px 8px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}
@@ -1182,14 +1199,14 @@ export default function ContratosModule() {
                 <textarea
                   className="form-control"
                   rows="3"
-                  placeholder="Ex: Prestação de serviços de consultoria imobiliária ref. [competência]"
+                  placeholder="Ex: Prestação de serviços de consultoria imobiliária ref. {competencia}"
                   value={editForm.descricao_nf}
                   onChange={e => setEditForm({...editForm, descricao_nf: e.target.value})}
                   style={{resize: 'vertical', fontSize: '13px', fontFamily: 'inherit'}}
                 />
                 <div style={{marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6}}>
                   Variáveis disponíveis:{' '}
-                  {['[competência]','[numero_parcela]','[total_parcelas]','[valor]'].map(v => (
+                  {['{competencia}','{numero_parcela}','{total_parcelas}','{valor}'].map(v => (
                     <code key={v} style={{backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '3px', padding: '0 4px', marginRight: '4px', fontSize: '11px'}}>{v}</code>
                   ))}
                 </div>

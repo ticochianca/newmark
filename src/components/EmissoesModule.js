@@ -180,11 +180,11 @@ export default function EmissoesModule() {
     const tmpl = p.contratos?.descricao_nf;
     if (!tmpl) return null;
     return tmpl
-      .replace(/\[competência\]/gi, getMesPrestacaoLong(p))
-      .replace(/\[competencia\]/gi, getMesPrestacaoLong(p))
-      .replace(/\[numero_parcela\]/gi, numeroParcela != null ? String(numeroParcela) : '?')
-      .replace(/\[total_parcelas\]/gi, totalParcelas != null ? String(totalParcelas) : '?')
-      .replace(/\[valor\]/gi, `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`);
+      .replace(/\{competencia\}/gi, getMesPrestacaoLong(p))
+      .replace(/\{competência\}/gi, getMesPrestacaoLong(p))
+      .replace(/\{numero_parcela\}/gi, numeroParcela != null ? String(numeroParcela) : '?')
+      .replace(/\{total_parcelas\}/gi, totalParcelas != null ? String(totalParcelas) : '?')
+      .replace(/\{valor\}/gi, `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`);
   };
 
   const getNFStatus = (p) => p.nf_numero
@@ -1284,14 +1284,14 @@ export default function EmissoesModule() {
                               {p.contratos?.titulo}
                             </span>
                             {descricaoNF && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', marginLeft: '16px' }}>
-                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic', flex: 1 }}>{descricaoNF}</span>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', marginTop: '3px', marginLeft: '16px' }}>
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', flex: 1, whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{descricaoNF}</span>
                                 <button
                                   title="Copiar descrição"
                                   onClick={() => navigator.clipboard.writeText(descricaoNF)}
-                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', fontSize: '11px', color: 'var(--text-muted)', opacity: 0.6 }}
-                                  onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                                  onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
+                                  style={{ background: '#f1f5f9', border: '1px solid var(--border)', borderRadius: '4px', cursor: 'pointer', padding: '3px 7px', fontSize: '13px', color: 'var(--text-muted)', flexShrink: 0, lineHeight: 1 }}
+                                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--secondary)'; e.currentTarget.style.color = '#fff'; }}
+                                  onMouseLeave={e => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = 'var(--text-muted)'; }}
                                 >
                                   ⎘
                                 </button>
