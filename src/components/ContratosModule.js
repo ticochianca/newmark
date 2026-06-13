@@ -19,8 +19,9 @@ export default function ContratosModule() {
   const [editForm, setEditForm] = useState({ titulo: '', cliente_id: '', status: '', data_fim: '', valor_total: '', data_aplicacao: '', novaObservacao: '', historico_observacoes: [], arquivado: false, previsao_conclusao: '', obs_termino: '', mensagem_padrao: '', descricao_nf: '' });
 
   // Freeze Modal State
-  const [congelarModal, setCongelarModal] = useState({ open: false, contrato: null });
-  const [congelarForm, setCongelarForm] = useState({ desde: '', previsao_retorno: '' });
+  const [congelarModal, setCongelarModal] = useState({ open: false, contrato: null, parcelas: [] });
+  const [congelarForm, setCongelarForm] = useState({ previsao_retorno: '' });
+  const [congelarCutoffIdx, setCongelarCutoffIdx] = useState(0);
   const [congelarSaving, setCongelarSaving] = useState(false);
 
   // Encerrar Modal State
@@ -463,47 +464,55 @@ export default function ContratosModule() {
   };
 
   // --- Funções de Congelamento ---
-  const openCongelarModal = (c) => {
-    setCongelarModal({ open: true, contrato: c });
-    setCongelarForm({
-      desde: c.congelado_desde || new Date().toISOString().split('T')[0],
-      previsao_retorno: c.congelado_previsao_retorno || '',
-    });
+  const openCongelarModal = async (c) => {
+    const statuses = c.congelado
+      ? ['Congelada']
+      : ['Pendente', 'Reprogramada', 'NF Emitida'];
+    const { data } = await supabase
+      .from('parcelas')
+      .select('id, data_vencimento, valor, status, numero')
+      .eq('contrato_id', c.id)
+      .in('status', statuses)
+      .order('data_vencimento', { ascending: true });
+    setCongelarCutoffIdx(0);
+    setCongelarForm({ previsao_retorno: c.congelado_previsao_retorno || '' });
+    setCongelarModal({ open: true, contrato: c, parcelas: data || [] });
   };
 
   const handleCongelar = async () => {
-    const { contrato } = congelarModal;
-    if (!congelarForm.desde) { alert('Informe a data de início do congelamento.'); return; }
+    const { contrato, parcelas } = congelarModal;
     setCongelarSaving(true);
+    const paraCongelar = parcelas.slice(congelarCutoffIdx);
+    const primeiraData = paraCongelar[0]?.data_vencimento;
 
     const { error: cErr } = await supabase.from('contratos').update({
       congelado: true,
-      congelado_desde: congelarForm.desde,
+      congelado_desde: primeiraData || null,
       congelado_previsao_retorno: congelarForm.previsao_retorno || null,
     }).eq('id', contrato.id);
     if (cErr) { alert('Erro: ' + cErr.message); setCongelarSaving(false); return; }
 
-    const { error: pErr } = await supabase.from('parcelas')
-      .update({ status: 'Congelada' })
-      .eq('contrato_id', contrato.id)
-      .in('status', ['Pendente', 'Reprogramada', 'NF Emitida'])
-      .gte('data_vencimento', congelarForm.desde);
-    if (pErr) { alert('Erro ao congelar parcelas: ' + pErr.message); setCongelarSaving(false); return; }
+    if (paraCongelar.length > 0) {
+      const { error: pErr } = await supabase.from('parcelas')
+        .update({ status: 'Congelada' })
+        .in('id', paraCongelar.map(p => p.id));
+      if (pErr) { alert('Erro ao congelar parcelas: ' + pErr.message); setCongelarSaving(false); return; }
+    }
 
-    setCongelarModal({ open: false, contrato: null });
+    setCongelarModal({ open: false, contrato: null, parcelas: [] });
     setCongelarSaving(false);
     fetchData();
   };
 
   const handleDescongelar = async () => {
-    const { contrato } = congelarModal;
-    if (!window.confirm(`Descongelar "${contrato.titulo}"? As parcelas congeladas voltarão a ficar pendentes.`)) return;
+    const { contrato, parcelas } = congelarModal;
     setCongelarSaving(true);
 
-    await supabase.from('parcelas')
-      .update({ status: 'Pendente' })
-      .eq('contrato_id', contrato.id)
-      .eq('status', 'Congelada');
+    if (parcelas.length > 0) {
+      await supabase.from('parcelas')
+        .update({ status: 'Pendente' })
+        .in('id', parcelas.map(p => p.id));
+    }
 
     const { error: cErr } = await supabase.from('contratos').update({
       congelado: false,
@@ -512,7 +521,7 @@ export default function ContratosModule() {
     }).eq('id', contrato.id);
     if (cErr) { alert('Erro: ' + cErr.message); setCongelarSaving(false); return; }
 
-    setCongelarModal({ open: false, contrato: null });
+    setCongelarModal({ open: false, contrato: null, parcelas: [] });
     setCongelarSaving(false);
     fetchData();
   };
@@ -1337,84 +1346,166 @@ export default function ContratosModule() {
         </div>
       </div>
       {/* Modal Congelar Contrato */}
-      <div className={`modal-overlay ${congelarModal.open ? 'active' : ''}`}>
-        <div className="modal" style={{ maxWidth: '460px' }}>
-          <div className="modal-header">
-            <h2>{congelarModal.contrato?.congelado ? '❄ Gerenciar Congelamento' : '❄ Congelar Contrato'}</h2>
-            <button className="close-modal" onClick={() => setCongelarModal({ open: false, contrato: null })}>&times;</button>
-          </div>
-          <div className="modal-body">
-            <div style={{ marginBottom: '16px', padding: '10px 14px', backgroundColor: 'var(--bg-dark)', borderRadius: '8px', fontSize: '13px' }}>
-              <strong style={{ color: 'var(--secondary)' }}>{congelarModal.contrato?.clientes?.apelido || congelarModal.contrato?.clientes?.nome}</strong>
-              <span style={{ color: 'var(--text-muted)', marginLeft: '8px' }}>{congelarModal.contrato?.titulo}</span>
-            </div>
+      {(() => {
+        const { open, contrato, parcelas } = congelarModal;
+        const isCongelado = contrato?.congelado;
+        const ativas = isCongelado ? parcelas.length : congelarCutoffIdx;
+        const congeladas = isCongelado ? parcelas.length : parcelas.length - congelarCutoffIdx;
+        const valorCongelado = isCongelado
+          ? parcelas.reduce((s, p) => s + (p.valor || 0), 0)
+          : parcelas.slice(congelarCutoffIdx).reduce((s, p) => s + (p.valor || 0), 0);
+        return (
+          <div className={`modal-overlay ${open ? 'active' : ''}`}>
+            <div className="modal" style={{ maxWidth: '520px' }}>
+              <div className="modal-header">
+                <h2>{isCongelado ? '❄ Descongelar Contrato' : '❄ Congelar Contrato'}</h2>
+                <button className="close-modal" onClick={() => setCongelarModal({ open: false, contrato: null, parcelas: [] })}>&times;</button>
+              </div>
+              <div className="modal-body">
+                <div style={{ padding: '10px 14px', backgroundColor: 'var(--bg-dark)', borderRadius: '8px', marginBottom: '20px', fontSize: '13px' }}>
+                  <strong style={{ color: 'var(--secondary)' }}>{contrato?.clientes?.apelido || contrato?.clientes?.nome}</strong>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: '8px' }}>{contrato?.titulo}</span>
+                </div>
 
-            {congelarModal.contrato?.congelado ? (
-              <div>
-                <div style={{ padding: '14px', backgroundColor: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: '8px', marginBottom: '20px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#0369a1', marginBottom: '8px' }}>❄ Contrato congelado</div>
-                  <div style={{ fontSize: '13px', color: '#0369a1' }}>
-                    <div>Desde: <strong>{congelarModal.contrato.congelado_desde ? new Date(congelarModal.contrato.congelado_desde + 'T12:00:00').toLocaleDateString('pt-BR') : '—'}</strong></div>
-                    {congelarModal.contrato.congelado_previsao_retorno && (
-                      <div style={{ marginTop: '4px' }}>Previsão de retorno: <strong>{new Date(congelarModal.contrato.congelado_previsao_retorno + 'T12:00:00').toLocaleDateString('pt-BR')}</strong></div>
+                {isCongelado ? (
+                  <>
+                    <p style={{ fontSize: '13px', color: 'var(--secondary)', fontWeight: 600, marginBottom: '4px' }}>
+                      Parcelas congeladas atualmente
+                    </p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.5 }}>
+                      Ao descongelar, todas voltam para <strong>Pendente</strong>. Você pode emitir parcelas pontuais sem descongelar no módulo de Parcelas.
+                    </p>
+                    {parcelas.length === 0 ? (
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Nenhuma parcela congelada encontrada.</p>
+                    ) : (
+                      <div style={{ border: '1px solid #bae6fd', borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
+                        {parcelas.map((p, i) => (
+                          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', backgroundColor: '#f0f9ff', borderTop: i > 0 ? '1px solid #bae6fd' : 'none' }}>
+                            <span style={{ fontSize: '16px', color: '#0369a1' }}>❄</span>
+                            <div style={{ flex: 1 }}>
+                              <span style={{ fontSize: '13px', color: '#0369a1', fontWeight: 500 }}>
+                                {fmtCompetencia(p, contrato)}
+                              </span>
+                              <span style={{ fontSize: '12px', color: '#7dd3fc', marginLeft: '10px' }}>
+                                vence {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '13px', fontWeight: 600, color: '#0369a1' }}>
+                              R$ {(p.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     )}
-                  </div>
-                </div>
-                <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px', lineHeight: 1.5 }}>
-                  Descongelar vai restaurar todas as parcelas congeladas para status "Pendente". Você poderá emitir parcelas pontuais sem descongelar clicando nelas no módulo de Parcelas.
-                </p>
-                <button
-                  className="btn btn-primary"
-                  style={{ width: '100%', backgroundColor: '#0369a1', borderColor: '#0369a1' }}
-                  onClick={handleDescongelar}
-                  disabled={congelarSaving}
-                >
-                  {congelarSaving ? 'Processando...' : 'Descongelar Contrato'}
-                </button>
+                    <div style={{ padding: '10px 14px', backgroundColor: '#e0f2fe', borderRadius: '8px', border: '1px solid #bae6fd', fontSize: '12px' }}>
+                      <span style={{ color: '#0369a1' }}>❄ <strong>{parcelas.length}</strong> parcela{parcelas.length !== 1 ? 's' : ''} congelada{parcelas.length !== 1 ? 's' : ''} — R$ {valorCongelado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ fontSize: '13px', color: 'var(--secondary)', fontWeight: 600, marginBottom: '4px' }}>
+                      A partir de qual parcela congelar?
+                    </p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.5 }}>
+                      Clique em uma linha para definir o início do congelamento. Parcelas antes da selecionada <strong>permanecem ativas</strong>.
+                    </p>
+                    {parcelas.length === 0 ? (
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Não há parcelas pendentes para congelar.</p>
+                    ) : (
+                      <div style={{ border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
+                        {parcelas.map((p, i) => {
+                          const isFrozen = i >= congelarCutoffIdx;
+                          const isFirst = i === congelarCutoffIdx;
+                          return (
+                            <div
+                              key={p.id}
+                              onClick={() => setCongelarCutoffIdx(i)}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: '12px',
+                                padding: '10px 14px',
+                                cursor: 'pointer',
+                                borderTop: isFirst && i > 0 ? '2px dashed #7dd3fc' : i > 0 ? '1px solid var(--border)' : 'none',
+                                backgroundColor: isFrozen ? '#f0f9ff' : '#fff',
+                                transition: 'background 0.1s',
+                              }}
+                            >
+                              <span style={{ fontSize: '16px', width: '18px', textAlign: 'center', flexShrink: 0, color: isFrozen ? '#0369a1' : 'var(--text-muted)' }}>
+                                {isFrozen ? '❄' : '✓'}
+                              </span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <span style={{ fontSize: '13px', fontWeight: isFirst ? 700 : 400, color: isFrozen ? '#0369a1' : 'var(--text-main)' }}>
+                                  {fmtCompetencia(p, contrato)}
+                                </span>
+                                <span style={{ fontSize: '12px', color: isFrozen ? '#7dd3fc' : 'var(--text-muted)', marginLeft: '10px' }}>
+                                  vence {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: isFrozen ? '#0369a1' : 'var(--text-main)', flexShrink: 0 }}>
+                                R$ {(p.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </span>
+                              {isFirst && (
+                                <span style={{ fontSize: '10px', fontWeight: 700, color: '#0369a1', backgroundColor: '#bae6fd', border: '1px solid #7dd3fc', borderRadius: '4px', padding: '1px 6px', flexShrink: 0 }}>
+                                  INÍCIO
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {parcelas.length > 0 && (
+                      <div style={{ padding: '10px 14px', backgroundColor: congeladas > 0 ? '#f0f9ff' : '#f8fafc', borderRadius: '8px', border: `1px solid ${congeladas > 0 ? '#bae6fd' : 'var(--border)'}`, fontSize: '12px', display: 'flex', gap: '16px', marginBottom: '16px' }}>
+                        {ativas > 0 && <span style={{ color: '#15803d' }}>✓ <strong>{ativas}</strong> ativa{ativas !== 1 ? 's' : ''}</span>}
+                        {congeladas > 0 && (
+                          <span style={{ color: '#0369a1' }}>❄ <strong>{congeladas}</strong> congelada{congeladas !== 1 ? 's' : ''} — R$ {valorCongelado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="form-group">
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        Perspectiva de retorno
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>(opcional)</span>
+                      </label>
+                      <input
+                        type="date"
+                        className="form-control"
+                        value={congelarForm.previsao_retorno}
+                        onChange={e => setCongelarForm({ ...congelarForm, previsao_retorno: e.target.value })}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
-            ) : (
-              <div>
-                <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px', lineHeight: 1.5 }}>
-                  As parcelas pendentes a partir da data escolhida serão marcadas como <strong>Congeladas</strong> e não entrarão nos totais. Você pode emiti-las pontualmente sem reabrir o contrato.
-                </p>
-                <div className="form-group">
-                  <label>Congelar a partir de</label>
-                  <input
-                    type="date"
-                    className="form-control"
-                    value={congelarForm.desde}
-                    onChange={e => setCongelarForm({ ...congelarForm, desde: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Perspectiva de retorno
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 400 }}>(opcional)</span>
-                  </label>
-                  <input
-                    type="date"
-                    className="form-control"
-                    value={congelarForm.previsao_retorno}
-                    onChange={e => setCongelarForm({ ...congelarForm, previsao_retorno: e.target.value })}
-                  />
-                </div>
-                <button
-                  className="btn btn-primary"
-                  style={{ width: '100%', backgroundColor: '#0369a1', borderColor: '#0369a1' }}
-                  onClick={handleCongelar}
-                  disabled={congelarSaving || !congelarForm.desde}
-                >
-                  {congelarSaving ? 'Congelando...' : 'Confirmar Congelamento'}
+              <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+                <button className="btn btn-secondary" onClick={() => setCongelarModal({ open: false, contrato: null, parcelas: [] })} disabled={congelarSaving}>
+                  Cancelar
                 </button>
+                {isCongelado ? (
+                  <button
+                    className="btn btn-primary"
+                    style={{ backgroundColor: '#0369a1', borderColor: '#0369a1' }}
+                    onClick={handleDescongelar}
+                    disabled={congelarSaving}
+                  >
+                    {congelarSaving ? 'Processando...' : `Descongelar ${parcelas.length > 0 ? parcelas.length + ' parcela' + (parcelas.length !== 1 ? 's' : '') : 'contrato'}`}
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-primary"
+                    style={{ backgroundColor: '#0369a1', borderColor: '#0369a1' }}
+                    onClick={handleCongelar}
+                    disabled={congelarSaving || parcelas.length === 0}
+                  >
+                    {congelarSaving ? 'Congelando...' : `Congelar ${congeladas} parcela${congeladas !== 1 ? 's' : ''}`}
+                  </button>
+                )}
               </div>
-            )}
+            </div>
           </div>
-          <div className="modal-footer">
-            <button className="btn btn-secondary" onClick={() => setCongelarModal({ open: false, contrato: null })}>Fechar</button>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Modal Encerrar Contrato */}
       {(() => {
