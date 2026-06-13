@@ -296,13 +296,18 @@ export default function EmissoesModule() {
     if (formNF.numero && !['NF Emitida', 'Paga'].includes(p.status)) newStatus = 'NF Emitida';
     if (!formNF.numero && p.status === 'NF Emitida') newStatus = 'Pendente';
 
-    const { error } = await supabase.from('parcelas').update({
+    const updateData = {
       nf_numero: formNF.numero || null,
       nf_arquivo_url: nfUrl,
       boleto_arquivo_url: boletoUrl,
       data_vencimento: formBoleto.vencimento || p.data_vencimento,
       status: newStatus,
-    }).eq('id', p.id);
+    };
+    if (formNF.file && parseResultNF?.retencao_issqn) {
+      const vRet = parseFloat(parseResultNF.retencao_issqn.replace(/\./g, '').replace(',', '.'));
+      if (vRet > 0) updateData.retencao_issqn = vRet;
+    }
+    const { error } = await supabase.from('parcelas').update(updateData).eq('id', p.id);
 
     if (error) alert('Erro: ' + error.message);
     else { closeModal(); fetchParcelas(); }
@@ -384,15 +389,17 @@ export default function EmissoesModule() {
     const vParsed = parseFloat((parsed.valor || '').replace(/\./g, '').replace(',', '.'));
     const vParc = Number(parcela.valor);
     if (vParsed > 0) {
-      const retPct = parcela?.contratos?.percentual_retencao || 0;
-      const okGross   = Math.abs(vParsed - vParc) < 0.01;
-      const okLiquido = retPct > 0 && Math.abs(vParsed - vParc * (1 - retPct / 100)) < 0.05;
+      const retVal = Number(parcela?.retencao_issqn) || 0;          // R$ absoluto salvo da NF
+      const retPct = parcela?.contratos?.percentual_retencao || 0;  // % fixo do contrato (fallback)
+      const okGross      = Math.abs(vParsed - vParc) < 0.01;
+      const okLiquidoAbs = retVal > 0 && Math.abs(vParsed - (vParc - retVal)) < 0.05;
+      const okLiquidoPct = !okLiquidoAbs && retPct > 0 && Math.abs(vParsed - vParc * (1 - retPct / 100)) < 0.05;
       confs.push({
         label: 'Valor',
-        ok: okGross || okLiquido,
+        ok: okGross || okLiquidoAbs || okLiquidoPct,
         parsed: vParsed,
         expected: vParc,
-        obs: okLiquido ? `retenção ${retPct}%` : null,
+        obs: okLiquidoAbs ? `retenção R$ ${retVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : okLiquidoPct ? `retenção ${retPct}%` : null,
       });
     }
 
@@ -649,11 +656,16 @@ export default function EmissoesModule() {
         if (bulkType === 'nf') {
           const novoStatus = ['NF Emitida', 'Paga'].includes(item.parcelaSelecionada.status)
             ? item.parcelaSelecionada.status : 'NF Emitida';
-          await supabase.from('parcelas').update({
+          const nfUpdate = {
             nf_numero: item.parsed.numero || null,
             nf_arquivo_url: json.url,
             status: novoStatus,
-          }).eq('id', item.parcelaSelecionada.id);
+          };
+          if (item.parsed.retencao_issqn) {
+            const vRet = parseFloat(item.parsed.retencao_issqn.replace(/\./g, '').replace(',', '.'));
+            if (vRet > 0) nfUpdate.retencao_issqn = vRet;
+          }
+          await supabase.from('parcelas').update(nfUpdate).eq('id', item.parcelaSelecionada.id);
         } else {
           await supabase.from('parcelas').update({
             boleto_numero: item.parsed.numeroDocumento || null,
@@ -824,19 +836,31 @@ export default function EmissoesModule() {
       const parseValor = (s) => parseFloat((s || '').replace(/\./g, '').replace(',', '.'));
       const vNF = parseValor(rNF.valor);
       const vBol = parseValor(rBol.valor);
-      const retencao = modalRetencao || 0;
-      if (retencao > 0) {
-        const vLiquido = vNF * (1 - retencao / 100);
-        const ok = Math.abs(vBol - vLiquido) < 0.02;
+      if (rNF.valor_liquido) {
+        // Usa o valor líquido exato extraído da própria NF
+        const vLiq = parseValor(rNF.valor_liquido);
+        const ok = Math.abs(vBol - vLiq) < 0.05;
         itens.push({
-          label: `Valor boleto × líquido NF (${retencao}% retenção)`,
+          label: 'Valor boleto × líquido NF (retenção ISSQN)',
           ok,
-          nf: `R$ ${rNF.valor} → líquido R$ ${vLiquido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
+          nf: `R$ ${rNF.valor} → líquido R$ ${rNF.valor_liquido}`,
           boleto: `R$ ${rBol.valor}`,
         });
       } else {
-        const ok = Math.abs(vNF - vBol) < 0.01;
-        itens.push({ label: 'Valor NF × valor boleto', ok, nf: `R$ ${rNF.valor}`, boleto: `R$ ${rBol.valor}` });
+        const retencao = modalRetencao || 0;
+        if (retencao > 0) {
+          const vLiquido = vNF * (1 - retencao / 100);
+          const ok = Math.abs(vBol - vLiquido) < 0.05;
+          itens.push({
+            label: `Valor boleto × líquido NF (${retencao.toFixed(2)}% retenção)`,
+            ok,
+            nf: `R$ ${rNF.valor} → líquido R$ ${vLiquido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
+            boleto: `R$ ${rBol.valor}`,
+          });
+        } else {
+          const ok = Math.abs(vNF - vBol) < 0.01;
+          itens.push({ label: 'Valor NF × valor boleto', ok, nf: `R$ ${rNF.valor}`, boleto: `R$ ${rBol.valor}` });
+        }
       }
     }
 
