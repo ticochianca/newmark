@@ -1897,22 +1897,24 @@ export default function EmissoesModule() {
                     {emailModal.parcelas.map(p => {
                       const hasDoc = !!(p.nf_numero || p.nf_arquivo_url);
                       const included = emailParcelasIncluidas.includes(p.id);
+                      const overdue = isOverdue(p);
                       return (
                         <div key={p.id} style={{
                           display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px',
-                          backgroundColor: included ? '#f0f9ff' : '#f8fafc',
-                          border: '1px solid ' + (included ? '#bae6fd' : 'var(--border)'),
+                          backgroundColor: overdue ? (included ? '#fff1f2' : '#fef2f2') : (included ? '#f0f9ff' : '#f8fafc'),
+                          border: '1px solid ' + (overdue ? (included ? '#fca5a5' : '#fecaca') : (included ? '#bae6fd' : 'var(--border)')),
                           borderRadius: '6px', opacity: hasDoc ? 1 : 0.6,
                         }}>
                           <input type="checkbox" checked={included} disabled={!hasDoc} onChange={() => toggleEmailParcela(p.id)} />
                           <div style={{ flex: 1, fontSize: '12px' }}>
-                            <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>{p.contratos?.titulo}</span>
+                            <span style={{ fontWeight: 600, color: overdue ? '#dc2626' : 'var(--secondary)' }}>{p.contratos?.titulo}</span>
                             <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>ref. {getMesPrestacaoLong(p)}</span>
+                            {overdue && <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 700, color: '#dc2626' }}>· em atraso</span>}
                           </div>
-                          <span style={{ fontWeight: 600, fontSize: '12px', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontWeight: 600, fontSize: '12px', whiteSpace: 'nowrap', color: overdue ? '#dc2626' : 'inherit' }}>
                             R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                           </span>
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: '11px', color: overdue ? '#ef4444' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                             venc. {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
                           </span>
                           {!hasDoc && <span style={{ fontSize: '10px', color: '#ef4444', whiteSpace: 'nowrap' }}>sem NF</span>}
