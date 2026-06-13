@@ -78,7 +78,7 @@ export default function EmissoesModule() {
     const start = `${ano}-${mesStr}-01`;
     const daysInMonth = new Date(ano, mes, 0).getDate();
     const end = `${ano}-${mesStr}-${String(daysInMonth).padStart(2, '0')}`;
-    const sel = '*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, congelado, congelado_desde, clientes(id, nome, apelido, email_cobranca, cnpj))';
+    const sel = '*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, congelado, congelado_desde, descricao_nf, clientes(id, nome, apelido, email_cobranca, cnpj))';
 
     const [{ data: monthData, error: err1 }, { data: overdueData, error: err2 }] = await Promise.all([
       supabase.from('parcelas').select(sel)
@@ -172,7 +172,19 @@ export default function EmissoesModule() {
 
   const isOverdue = (p) => {
     if (p.status === 'Paga') return false;
+    if (isParcelaCongelada(p)) return false;
     return new Date(p.data_vencimento + 'T12:00:00') < today;
+  };
+
+  const resolveDescricaoNF = (p, numeroParcela, totalParcelas) => {
+    const tmpl = p.contratos?.descricao_nf;
+    if (!tmpl) return null;
+    return tmpl
+      .replace(/\[competência\]/gi, getMesPrestacaoLong(p))
+      .replace(/\[competencia\]/gi, getMesPrestacaoLong(p))
+      .replace(/\[numero_parcela\]/gi, numeroParcela != null ? String(numeroParcela) : '?')
+      .replace(/\[total_parcelas\]/gi, totalParcelas != null ? String(totalParcelas) : '?')
+      .replace(/\[valor\]/gi, `R$ ${Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`);
   };
 
   const getNFStatus = (p) => p.nf_numero
@@ -1217,6 +1229,21 @@ export default function EmissoesModule() {
                 (a.cliente?.apelido || a.cliente?.nome || '').localeCompare(b.cliente?.apelido || b.cliente?.nome || '')
               );
 
+              // Índice sequencial de cada parcela dentro do seu contrato (por vencimento)
+              const parcelaIndexMap = (() => {
+                const byContrato = {};
+                parcelasFiltradas.forEach(p => {
+                  const cid = p.contratos?.id;
+                  if (cid) { if (!byContrato[cid]) byContrato[cid] = []; byContrato[cid].push(p); }
+                });
+                const map = {};
+                Object.values(byContrato).forEach(ps => {
+                  const sorted = [...ps].sort((a, b) => new Date(a.data_vencimento) - new Date(b.data_vencimento));
+                  sorted.forEach((p, i) => { map[p.id] = { numeroParcela: i + 1, totalParcelas: sorted.length }; });
+                });
+                return map;
+              })();
+
               return groupedArray.map(grupo => {
                 const { cliente, parcelas: gParcelas } = grupo;
                 return (
@@ -1247,13 +1274,29 @@ export default function EmissoesModule() {
                       const nfSt = getNFStatus(p);
                       const bolSt = getBoletoStatus(p);
                       const overdue = isOverdue(p);
+                      const { numeroParcela, totalParcelas } = parcelaIndexMap[p.id] || {};
+                      const descricaoNF = resolveDescricaoNF(p, numeroParcela, totalParcelas);
                       return (
                         <tr key={p.id} style={{ opacity: p.status === 'Paga' ? 0.55 : 1 }}>
-                          <td style={{ padding: '8px 8px 8px 24px' }}>
+                          <td style={{ padding: '6px 8px 6px 24px' }}>
                             <span style={{ fontSize: '12px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                               <span style={{ color: 'var(--border)' }}>└</span>
                               {p.contratos?.titulo}
                             </span>
+                            {descricaoNF && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px', marginLeft: '16px' }}>
+                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontStyle: 'italic', flex: 1 }}>{descricaoNF}</span>
+                                <button
+                                  title="Copiar descrição"
+                                  onClick={() => navigator.clipboard.writeText(descricaoNF)}
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', fontSize: '11px', color: 'var(--text-muted)', opacity: 0.6 }}
+                                  onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                                  onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}
+                                >
+                                  ⎘
+                                </button>
+                              </div>
+                            )}
                           </td>
                           <td style={{ textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>{getMesPrestacao(p)}</td>
                           <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap', fontSize: '12px' }}>
@@ -1884,41 +1927,42 @@ export default function EmissoesModule() {
             ) : (
               <>
                 {/* Para */}
-                <div style={{ marginBottom: '16px', padding: '10px 14px', backgroundColor: 'var(--bg-dark)', borderRadius: '8px', fontSize: '13px' }}>
-                  <strong>Para:</strong> {emailModal.cliente?.email_cobranca || <span style={{ color: '#ef4444' }}>sem e-mail cadastrado</span>}
+                <div style={{ marginBottom: '14px', padding: '7px 12px', backgroundColor: 'var(--bg-dark)', borderRadius: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  <strong style={{ color: 'var(--secondary)', fontWeight: 600 }}>Para:</strong>{' '}
+                  {emailModal.cliente?.email_cobranca || <span style={{ color: '#ef4444' }}>sem e-mail cadastrado</span>}
                 </div>
 
                 {/* Seção 1: Parcelas do período */}
-                <div style={{ marginBottom: '16px' }}>
-                  <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', marginBottom: '10px' }}>
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '6px' }}>
                     Parcelas do período
-                  </h4>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                     {emailModal.parcelas.map(p => {
                       const hasDoc = !!(p.nf_numero || p.nf_arquivo_url);
                       const included = emailParcelasIncluidas.includes(p.id);
                       const overdue = isOverdue(p);
                       return (
-                        <div key={p.id} style={{
-                          display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px',
-                          backgroundColor: overdue ? (included ? '#fff1f2' : '#fef2f2') : (included ? '#f0f9ff' : '#f8fafc'),
-                          border: '1px solid ' + (overdue ? (included ? '#fca5a5' : '#fecaca') : (included ? '#bae6fd' : 'var(--border)')),
-                          borderRadius: '6px', opacity: hasDoc ? 1 : 0.6,
+                        <label key={p.id} style={{
+                          display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 9px',
+                          backgroundColor: included ? (overdue ? '#fef2f2' : '#f8fafc') : 'transparent',
+                          border: '1px solid ' + (overdue ? '#fca5a5' : (included ? '#e2e8f0' : '#e2e8f0')),
+                          borderLeft: overdue ? '3px solid #dc2626' : (included ? '3px solid #93c5fd' : '3px solid transparent'),
+                          borderRadius: '4px', opacity: hasDoc ? 1 : 0.5, cursor: hasDoc ? 'pointer' : 'default',
                         }}>
-                          <input type="checkbox" checked={included} disabled={!hasDoc} onChange={() => toggleEmailParcela(p.id)} />
-                          <div style={{ flex: 1, fontSize: '12px' }}>
-                            <span style={{ fontWeight: 600, color: overdue ? '#dc2626' : 'var(--secondary)' }}>{p.contratos?.titulo}</span>
-                            <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>ref. {getMesPrestacaoLong(p)}</span>
-                            {overdue && <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 700, color: '#dc2626' }}>· em atraso</span>}
-                          </div>
-                          <span style={{ fontWeight: 600, fontSize: '12px', whiteSpace: 'nowrap', color: overdue ? '#dc2626' : 'inherit' }}>
+                          <input type="checkbox" checked={included} disabled={!hasDoc} onChange={() => toggleEmailParcela(p.id)} style={{ margin: 0 }} />
+                          <span style={{ flex: 1, fontSize: '11px', color: 'var(--secondary)' }}>
+                            <span style={{ fontWeight: 600 }}>{p.contratos?.titulo}</span>
+                            <span style={{ color: 'var(--text-muted)', marginLeft: '5px', fontWeight: 400 }}>ref. {getMesPrestacaoLong(p)}</span>
+                          </span>
+                          <span style={{ fontSize: '11px', fontWeight: 600, whiteSpace: 'nowrap', color: overdue ? '#dc2626' : 'var(--secondary)' }}>
                             R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                           </span>
-                          <span style={{ fontSize: '11px', color: overdue ? '#ef4444' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                            venc. {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                          <span style={{ fontSize: '10px', color: overdue ? '#ef4444' : 'var(--text-muted)', whiteSpace: 'nowrap', minWidth: '80px', textAlign: 'right' }}>
+                            {overdue ? '⚠ ' : ''}{new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
                           </span>
                           {!hasDoc && <span style={{ fontSize: '10px', color: '#ef4444', whiteSpace: 'nowrap' }}>sem NF</span>}
-                        </div>
+                        </label>
                       );
                     })}
                   </div>
@@ -1926,32 +1970,33 @@ export default function EmissoesModule() {
 
                 {/* Seção 2: Parcelas em atraso */}
                 {emailAtrasadas.length > 0 && (
-                  <div style={{ marginBottom: '16px', padding: '14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px' }}>
-                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: '#dc2626', marginBottom: '10px' }}>
-                      ⚠️ Parcelas em atraso ({emailAtrasadas.length})
-                    </h4>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#dc2626', marginBottom: '6px' }}>
+                      ⚠ Em atraso ({emailAtrasadas.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                       {emailAtrasadas.map(pa => {
                         const included = emailAtrasadasIncluidas.includes(pa.id);
                         return (
-                          <div key={pa.id} style={{
-                            display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px',
-                            backgroundColor: included ? '#fff1f2' : '#fff',
-                            border: '1px solid ' + (included ? '#fecaca' : '#fee2e2'),
-                            borderRadius: '6px',
+                          <label key={pa.id} style={{
+                            display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 9px',
+                            backgroundColor: included ? '#fef2f2' : 'transparent',
+                            border: '1px solid #fecaca',
+                            borderLeft: '3px solid ' + (included ? '#dc2626' : '#fca5a5'),
+                            borderRadius: '4px', cursor: 'pointer',
                           }}>
-                            <input type="checkbox" checked={included} onChange={() => toggleEmailAtrasada(pa.id)} />
-                            <div style={{ flex: 1, fontSize: '12px' }}>
-                              <span style={{ fontWeight: 600, color: 'var(--secondary)' }}>{pa.contratos?.titulo}</span>
-                              <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>ref. {getMesPrestacaoLong(pa)}</span>
-                            </div>
-                            <span style={{ fontWeight: 700, color: '#dc2626', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                            <input type="checkbox" checked={included} onChange={() => toggleEmailAtrasada(pa.id)} style={{ margin: 0 }} />
+                            <span style={{ flex: 1, fontSize: '11px', color: 'var(--secondary)' }}>
+                              <span style={{ fontWeight: 600 }}>{pa.contratos?.titulo}</span>
+                              <span style={{ color: 'var(--text-muted)', marginLeft: '5px', fontWeight: 400 }}>ref. {getMesPrestacaoLong(pa)}</span>
+                            </span>
+                            <span style={{ fontSize: '11px', fontWeight: 600, color: '#dc2626', whiteSpace: 'nowrap' }}>
                               R$ {Number(pa.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                             </span>
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                              venc. {new Date(pa.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                            <span style={{ fontSize: '10px', color: '#ef4444', whiteSpace: 'nowrap', minWidth: '80px', textAlign: 'right' }}>
+                              {new Date(pa.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
                             </span>
-                          </div>
+                          </label>
                         );
                       })}
                     </div>
@@ -1959,18 +2004,18 @@ export default function EmissoesModule() {
                 )}
 
                 {/* Seção 3: Mensagem editável */}
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', margin: 0 }}>
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
                       Mensagem
                       {emailMensagemModificada && (
-                        <span style={{ marginLeft: '8px', fontSize: '11px', color: '#d97706', fontWeight: 400, fontStyle: 'italic' }}>editada manualmente</span>
+                        <span style={{ marginLeft: '8px', fontSize: '10px', color: '#d97706', fontWeight: 400, textTransform: 'none', letterSpacing: 0, fontStyle: 'italic' }}>editada</span>
                       )}
-                    </h4>
+                    </div>
                     {emailMensagemModificada && (
                       <button
                         className="btn btn-secondary"
-                        style={{ fontSize: '11px', padding: '3px 10px' }}
+                        style={{ fontSize: '10px', padding: '2px 8px' }}
                         onClick={() => { setEmailMensagemModificada(false); setEmailMensagem(''); }}
                       >
                         ↺ Reconstruir
@@ -1979,8 +2024,8 @@ export default function EmissoesModule() {
                   </div>
                   <textarea
                     className="form-control"
-                    rows={10}
-                    style={{ fontSize: '13px', lineHeight: 1.7, fontFamily: 'inherit', resize: 'vertical' }}
+                    rows={9}
+                    style={{ fontSize: '12px', lineHeight: 1.65, fontFamily: 'inherit', resize: 'vertical' }}
                     value={emailMensagemModificada ? emailMensagem : mensagemAutoGerada}
                     onChange={e => { setEmailMensagem(e.target.value); setEmailMensagemModificada(true); }}
                     placeholder="Selecione as parcelas acima para gerar a mensagem automaticamente."
@@ -1989,14 +2034,17 @@ export default function EmissoesModule() {
 
                 {/* Seção 4: Anexos */}
                 {emailAnexos.length > 0 && (
-                  <div style={{ marginBottom: '16px' }}>
-                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--secondary)', marginBottom: '8px' }}>
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '6px' }}>
                       Anexos ({emailAnexos.length})
-                    </h4>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px' }}>
                       {emailAnexos.map((anexo, i) => (
                         <a key={i} href={anexo.url} target="_blank" rel="noopener noreferrer"
-                          style={{ fontSize: '12px', color: 'var(--secondary)', display: 'flex', alignItems: 'center', gap: '6px', textDecoration: 'underline' }}>
+                          style={{ fontSize: '11px', color: 'var(--secondary)', display: 'flex', alignItems: 'center', gap: '4px', textDecoration: 'none', opacity: 0.75 }}
+                          onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                          onMouseLeave={e => e.currentTarget.style.opacity = '0.75'}
+                        >
                           📎 {anexo.label.trim()}
                         </a>
                       ))}

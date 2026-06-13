@@ -16,7 +16,7 @@ export default function ContratosModule() {
   
   // Edit Modal State
   const [editModalState, setEditModalState] = useState({ isOpen: false, contrato: null });
-  const [editForm, setEditForm] = useState({ titulo: '', cliente_id: '', status: '', data_fim: '', valor_total: '', data_aplicacao: '', novaObservacao: '', historico_observacoes: [], arquivado: false, previsao_conclusao: '', obs_termino: '' });
+  const [editForm, setEditForm] = useState({ titulo: '', cliente_id: '', status: '', data_fim: '', valor_total: '', data_aplicacao: '', novaObservacao: '', historico_observacoes: [], arquivado: false, previsao_conclusao: '', obs_termino: '', mensagem_padrao: '', descricao_nf: '' });
 
   // Freeze Modal State
   const [congelarModal, setCongelarModal] = useState({ open: false, contrato: null });
@@ -259,6 +259,7 @@ export default function ContratosModule() {
       previsao_conclusao: contrato.previsao_conclusao || '',
       obs_termino: contrato.obs_termino || '',
       mensagem_padrao: contrato.mensagem_padrao || '',
+      descricao_nf: contrato.descricao_nf || '',
       percentual_retencao: contrato.percentual_retencao != null ? String(contrato.percentual_retencao) : '0',
     });
   };
@@ -315,6 +316,7 @@ export default function ContratosModule() {
       historico_observacoes: updatedObs,
       arquivado: editForm.arquivado,
       mensagem_padrao: editForm.mensagem_padrao || null,
+      descricao_nf: editForm.descricao_nf || null,
       percentual_retencao: parseFloat(editForm.percentual_retencao) || 0,
     };
     
@@ -1167,6 +1169,27 @@ export default function ContratosModule() {
                 <div style={{marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6}}>
                   Variáveis disponíveis:{' '}
                   {['{cliente}','{contrato}','{valor}','{vencimento}','{competencia}','{nf}','{boleto}'].map(v => (
+                    <code key={v} style={{backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '3px', padding: '0 4px', marginRight: '4px', fontSize: '11px'}}>{v}</code>
+                  ))}
+                </div>
+              </div>
+
+              {/* DESCRIÇÃO DA NF */}
+              <div className="form-group" style={{marginTop: '16px', borderTop: '1px solid var(--border)', paddingTop: '16px'}}>
+                <label style={{color: 'var(--secondary)', fontWeight: 700, marginBottom: '6px', display: 'block'}}>
+                  Descrição da NF
+                </label>
+                <textarea
+                  className="form-control"
+                  rows="3"
+                  placeholder="Ex: Prestação de serviços de consultoria imobiliária ref. [competência]"
+                  value={editForm.descricao_nf}
+                  onChange={e => setEditForm({...editForm, descricao_nf: e.target.value})}
+                  style={{resize: 'vertical', fontSize: '13px', fontFamily: 'inherit'}}
+                />
+                <div style={{marginTop: '6px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6}}>
+                  Variáveis disponíveis:{' '}
+                  {['[competência]','[numero_parcela]','[total_parcelas]','[valor]'].map(v => (
                     <code key={v} style={{backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '3px', padding: '0 4px', marginRight: '4px', fontSize: '11px'}}>{v}</code>
                   ))}
                 </div>
