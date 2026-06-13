@@ -22,6 +22,11 @@ export default function ContratosModule() {
   const [congelarModal, setCongelarModal] = useState({ open: false, contrato: null });
   const [congelarForm, setCongelarForm] = useState({ desde: '', previsao_retorno: '' });
   const [congelarSaving, setCongelarSaving] = useState(false);
+
+  // Encerrar Modal State
+  const [encerrarModal, setEncerrarModal] = useState({ open: false, contrato: null, parcelas: [] });
+  const [encerrarLastKeepIdx, setEncerrarLastKeepIdx] = useState(null); // null = keep all
+  const [encerrarSaving, setEncerrarSaving] = useState(false);
   
   // New Split Form State
   const [splitForm, setSplitForm] = useState({
@@ -113,11 +118,38 @@ export default function ContratosModule() {
     return () => window.removeEventListener('global:novoContrato', handleGlobalNovoContrato);
   }, []);
 
-  const handleEncerrarContrato = async (id, titulo) => {
-    if (!confirm(`Encerrar o contrato "${titulo}"?\n\nEle será arquivado e ficará oculto da lista principal. As parcelas em aberto continuarão visíveis em Parcelas e Emissões.`)) return;
-    const { error } = await supabase.from('contratos').update({ arquivado: true }).eq('id', id);
-    if (error) alert('Erro ao encerrar: ' + error.message);
-    else fetchData();
+  const openEncerrarModal = async (contrato) => {
+    const { data } = await supabase
+      .from('parcelas')
+      .select('id, data_vencimento, valor, status, numero')
+      .eq('contrato_id', contrato.id)
+      .not('status', 'in', '("Paga","Cancelada")')
+      .order('data_vencimento', { ascending: true });
+    setEncerrarLastKeepIdx(null);
+    setEncerrarModal({ open: true, contrato, parcelas: data || [] });
+  };
+
+  const handleConfirmarEncerramento = async (semRemover = false) => {
+    const { contrato, parcelas } = encerrarModal;
+    setEncerrarSaving(true);
+    if (!semRemover && encerrarLastKeepIdx !== null) {
+      const idsParaRemover = parcelas.slice(encerrarLastKeepIdx + 1).map(p => p.id);
+      if (idsParaRemover.length > 0) {
+        const { error } = await supabase.from('parcelas').delete().in('id', idsParaRemover);
+        if (error) { alert('Erro ao remover parcelas: ' + error.message); setEncerrarSaving(false); return; }
+      }
+    }
+    const { error } = await supabase.from('contratos').update({ arquivado: true }).eq('id', contrato.id);
+    if (error) { alert('Erro ao arquivar: ' + error.message); setEncerrarSaving(false); return; }
+    setEncerrarModal({ open: false, contrato: null, parcelas: [] });
+    setEncerrarSaving(false);
+    fetchData();
+  };
+
+  const fmtCompetencia = (parcela, contrato) => {
+    const d = new Date(parcela.data_vencimento + 'T12:00:00');
+    if (contrato?.tipo_cobranca === 'partido_fixo' && !contrato?.cobranca_mesmo_mes) d.setMonth(d.getMonth() - 1);
+    return d.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('.', '');
   };
 
   const handleDeleteContrato = async (id) => {
@@ -719,7 +751,7 @@ export default function ContratosModule() {
                         <button
                           className="btn btn-secondary"
                           style={{padding: '6px 8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#92400e', borderColor: '#fde68a', backgroundColor: '#fffbeb'}}
-                          onClick={() => handleEncerrarContrato(c.id, c.titulo)}
+                          onClick={() => openEncerrarModal(c)}
                           title="Encerrar / Arquivar Contrato"
                         >
                           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
@@ -1383,6 +1415,121 @@ export default function ContratosModule() {
           </div>
         </div>
       </div>
+
+      {/* Modal Encerrar Contrato */}
+      {(() => {
+        const { open, contrato, parcelas } = encerrarModal;
+        const mantidas = encerrarLastKeepIdx === null ? parcelas.length : encerrarLastKeepIdx + 1;
+        const removidas = encerrarLastKeepIdx === null ? 0 : parcelas.length - encerrarLastKeepIdx - 1;
+        const valorRemovido = encerrarLastKeepIdx === null ? 0 : parcelas.slice(encerrarLastKeepIdx + 1).reduce((s, p) => s + (p.valor || 0), 0);
+        return (
+          <div className={`modal-overlay ${open ? 'active' : ''}`}>
+            <div className="modal" style={{ maxWidth: '520px' }}>
+              <div className="modal-header">
+                <h2>Encerrar Contrato</h2>
+                <button className="close-modal" onClick={() => setEncerrarModal({ open: false, contrato: null, parcelas: [] })}>&times;</button>
+              </div>
+              <div className="modal-body">
+                <div style={{ padding: '10px 14px', backgroundColor: 'var(--bg-dark)', borderRadius: '8px', marginBottom: '20px', fontSize: '13px' }}>
+                  <strong style={{ color: 'var(--secondary)' }}>{contrato?.clientes?.apelido || contrato?.clientes?.nome}</strong>
+                  <span style={{ color: 'var(--text-muted)', marginLeft: '8px' }}>{contrato?.titulo}</span>
+                </div>
+
+                {parcelas.length === 0 ? (
+                  <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                    Não há parcelas pendentes neste contrato. Clique em <strong>Encerrar</strong> para arquivá-lo.
+                  </p>
+                ) : (
+                  <>
+                    <p style={{ fontSize: '13px', color: 'var(--secondary)', fontWeight: 600, marginBottom: '4px' }}>
+                      Qual é a última parcela que será cobrada?
+                    </p>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.5 }}>
+                      Clique em uma linha para definir o corte. As parcelas abaixo da selecionada serão <strong>removidas</strong>. Se não selecionar nada, todas são mantidas.
+                    </p>
+
+                    <div style={{ border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
+                      {parcelas.map((p, i) => {
+                        const isKept = encerrarLastKeepIdx === null || i <= encerrarLastKeepIdx;
+                        const isLast = i === encerrarLastKeepIdx;
+                        const isFirst = encerrarLastKeepIdx !== null && i === encerrarLastKeepIdx + 1;
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => setEncerrarLastKeepIdx(isLast ? null : i)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '12px',
+                              padding: '10px 14px',
+                              cursor: 'pointer',
+                              borderTop: isFirst ? '2px dashed #ef4444' : i > 0 ? '1px solid var(--border)' : 'none',
+                              backgroundColor: isKept ? (isLast ? '#f0fdf4' : '#fff') : '#fff5f5',
+                              transition: 'background 0.1s',
+                            }}
+                          >
+                            <span style={{ fontSize: '16px', width: '18px', textAlign: 'center', flexShrink: 0 }}>
+                              {isKept ? '✓' : '✕'}
+                            </span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{
+                                fontSize: '13px',
+                                fontWeight: isLast ? 700 : 400,
+                                color: isKept ? (isLast ? '#15803d' : 'var(--text-main)') : '#ef4444',
+                                textDecoration: isKept ? 'none' : 'line-through',
+                              }}>
+                                {fmtCompetencia(p, contrato)}
+                              </span>
+                              <span style={{ fontSize: '12px', color: isKept ? 'var(--text-muted)' : '#fca5a5', marginLeft: '10px' }}>
+                                vence {new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '13px', fontWeight: 600, color: isKept ? 'var(--text-main)' : '#fca5a5', flexShrink: 0 }}>
+                              R$ {(p.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            </span>
+                            {isLast && (
+                              <span style={{ fontSize: '10px', fontWeight: 700, color: '#15803d', backgroundColor: '#dcfce7', border: '1px solid #bbf7d0', borderRadius: '4px', padding: '1px 6px', flexShrink: 0 }}>
+                                ÚLTIMO
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ padding: '10px 14px', backgroundColor: removidas > 0 ? '#fff5f5' : '#f0fdf4', borderRadius: '8px', border: `1px solid ${removidas > 0 ? '#fecaca' : '#bbf7d0'}`, fontSize: '12px', display: 'flex', gap: '16px' }}>
+                      <span style={{ color: '#15803d' }}>✓ <strong>{mantidas}</strong> parcela{mantidas !== 1 ? 's' : ''} mantida{mantidas !== 1 ? 's' : ''}</span>
+                      {removidas > 0 && (
+                        <span style={{ color: '#ef4444' }}>
+                          ✕ <strong>{removidas}</strong> parcela{removidas !== 1 ? 's' : ''} removida{removidas !== 1 ? 's' : ''} — R$ {valorRemovido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+                <button className="btn btn-secondary" onClick={() => setEncerrarModal({ open: false, contrato: null, parcelas: [] })} disabled={encerrarSaving}>
+                  Cancelar
+                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {parcelas.length > 0 && (
+                    <button className="btn btn-secondary" onClick={() => handleConfirmarEncerramento(true)} disabled={encerrarSaving} style={{ fontSize: '12px' }}>
+                      Arquivar sem remover
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-primary"
+                    style={{ backgroundColor: '#b45309', borderColor: '#b45309' }}
+                    onClick={() => handleConfirmarEncerramento(false)}
+                    disabled={encerrarSaving}
+                  >
+                    {encerrarSaving ? 'Encerrando...' : removidas > 0 ? `Encerrar e remover ${removidas} parcela${removidas !== 1 ? 's' : ''}` : 'Encerrar Contrato'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
     </section>
   );
