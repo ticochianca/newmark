@@ -1691,7 +1691,7 @@ export default function EmissoesModule() {
                                 disabled={bulkSalvando}
                               >
                                 <option value="">Selecionar parcela...</option>
-                                {r.parcelasDoCliente.map(p => (
+                                {[...r.parcelasDoCliente].sort((a, b) => new Date(a.data_vencimento) - new Date(b.data_vencimento)).map(p => (
                                   <option key={p.id} value={p.id}>
                                     {p.contratos?.titulo} — {getMesPrestacao(p)} — R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                                   </option>
