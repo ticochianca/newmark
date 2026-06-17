@@ -11,6 +11,7 @@ import DashboardModule from '@/components/DashboardModule';
 import UsuariosModule from '@/components/UsuariosModule';
 import EmissoesModule from '@/components/EmissoesModule';
 import AgendaModule from '@/components/AgendaModule';
+import ReembolsosModule from '@/components/ReembolsosModule';
 
 export default function Home() {
   const [session, setSession] = useState(null);
@@ -117,6 +118,9 @@ export default function Home() {
           <div className={`nav-item ${activeTab === 'usuarios' ? 'active' : ''}`} onClick={() => setActiveTab('usuarios')}>
             Usuários
           </div>
+          <div className={`nav-item ${activeTab === 'reembolsos' ? 'active' : ''}`} onClick={() => setActiveTab('reembolsos')}>
+            Reembolsos
+          </div>
         </div>
 
         <div className="user-profile" style={{ cursor: 'pointer' }} onClick={openContaModal} title="Minha Conta">
@@ -167,6 +171,7 @@ export default function Home() {
         {activeTab === 'emissoes' && <EmissoesModule />}
         {activeTab === 'agenda' && <AgendaModule />}
         {activeTab === 'usuarios' && <UsuariosModule />}
+        {activeTab === 'reembolsos' && <ReembolsosModule />}
       </main>
 
       {/* ── Modal Minha Conta ──────────────────────────────────────────────── */}
