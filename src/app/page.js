@@ -15,6 +15,7 @@ import ReembolsosModule from '@/components/ReembolsosModule';
 
 export default function Home() {
   const [session, setSession] = useState(null);
+  const [currentProfile, setCurrentProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const router = useRouter();
@@ -58,11 +59,13 @@ export default function Home() {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!session) {
         router.push('/login');
       } else {
         setSession(session);
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+        setCurrentProfile(profile);
         setLoading(false);
       }
     });
@@ -83,6 +86,13 @@ export default function Home() {
     await supabase.auth.signOut();
   };
 
+  const isAdmin = currentProfile?.perfil === 'Administrador';
+  const perm = (mod) => {
+    if (isAdmin) return 'alterar';
+    return currentProfile?.permissoes?.[mod] ?? 'ver_tudo';
+  };
+  const canSee = (mod) => perm(mod) !== 'sem_acesso';
+
   if (loading) {
     return <div style={{display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center'}}>Carregando plataforma...</div>;
   }
@@ -94,39 +104,21 @@ export default function Home() {
         <img src="/logo.png" alt="Newmark" className="brand-logo" />
         
         <div className="nav-links">
-          <div className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
-            Dashboard
-          </div>
-          <div className={`nav-item ${activeTab === 'clientes' ? 'active' : ''}`} onClick={() => setActiveTab('clientes')}>
-            Clientes
-          </div>
-          <div className={`nav-item ${activeTab === 'contratos' ? 'active' : ''}`} onClick={() => setActiveTab('contratos')}>
-            Contratos
-          </div>
-          <div className={`nav-item ${activeTab === 'parcelas' ? 'active' : ''}`} onClick={() => setActiveTab('parcelas')}>
-            Parcelas
-          </div>
-          <div className={`nav-item ${activeTab === 'alocacoes' ? 'active' : ''}`} onClick={() => setActiveTab('alocacoes')}>
-            Alocações
-          </div>
-          <div className={`nav-item ${activeTab === 'emissoes' ? 'active' : ''}`} onClick={() => setActiveTab('emissoes')}>
-            Emissões
-          </div>
-          <div className={`nav-item ${activeTab === 'agenda' ? 'active' : ''}`} onClick={() => setActiveTab('agenda')}>
-            Agenda
-          </div>
-          <div className={`nav-item ${activeTab === 'usuarios' ? 'active' : ''}`} onClick={() => setActiveTab('usuarios')}>
-            Usuários
-          </div>
-          <div className={`nav-item ${activeTab === 'reembolsos' ? 'active' : ''}`} onClick={() => setActiveTab('reembolsos')}>
-            Reembolsos
-          </div>
+          {canSee('dashboard')  && <div className={`nav-item ${activeTab === 'dashboard'  ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>Dashboard</div>}
+          {canSee('clientes')   && <div className={`nav-item ${activeTab === 'clientes'   ? 'active' : ''}`} onClick={() => setActiveTab('clientes')}>Clientes</div>}
+          {canSee('contratos')  && <div className={`nav-item ${activeTab === 'contratos'  ? 'active' : ''}`} onClick={() => setActiveTab('contratos')}>Contratos</div>}
+          {canSee('parcelas')   && <div className={`nav-item ${activeTab === 'parcelas'   ? 'active' : ''}`} onClick={() => setActiveTab('parcelas')}>Parcelas</div>}
+          {canSee('alocacoes')  && <div className={`nav-item ${activeTab === 'alocacoes'  ? 'active' : ''}`} onClick={() => setActiveTab('alocacoes')}>Alocações</div>}
+          {canSee('emissoes')   && <div className={`nav-item ${activeTab === 'emissoes'   ? 'active' : ''}`} onClick={() => setActiveTab('emissoes')}>Emissões</div>}
+          {canSee('agenda')     && <div className={`nav-item ${activeTab === 'agenda'     ? 'active' : ''}`} onClick={() => setActiveTab('agenda')}>Agenda</div>}
+          {canSee('usuarios')   && <div className={`nav-item ${activeTab === 'usuarios'   ? 'active' : ''}`} onClick={() => setActiveTab('usuarios')}>Usuários</div>}
+          {canSee('reembolsos') && <div className={`nav-item ${activeTab === 'reembolsos' ? 'active' : ''}`} onClick={() => setActiveTab('reembolsos')}>Reembolsos</div>}
         </div>
 
         <div className="user-profile" style={{ cursor: 'pointer' }} onClick={openContaModal} title="Minha Conta">
-          <div className="avatar">A</div>
+          <div className="avatar">{(currentProfile?.nome || 'U').charAt(0).toUpperCase()}</div>
           <div className="user-info" style={{flex: 1}}>
-            <span className="user-name">Administrador</span>
+            <span className="user-name">{currentProfile?.nome || 'Usuário'}</span>
             <span className="user-role" style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{session?.user?.email}</span>
           </div>
           <button className="btn btn-secondary" style={{padding: '4px 8px'}} onClick={e => { e.stopPropagation(); handleLogout(); }}>Sair</button>
@@ -162,16 +154,15 @@ export default function Home() {
           </div>
         </header>
 
-        {activeTab === 'dashboard' && <DashboardModule />}
-        
-        {activeTab === 'clientes' && <ClientesModule />}
-        {activeTab === 'contratos' && <ContratosModule />}
-        {activeTab === 'parcelas' && <ParcelasModule />}
-        {activeTab === 'alocacoes' && <AlocacoesModule />}
-        {activeTab === 'emissoes' && <EmissoesModule />}
-        {activeTab === 'agenda' && <AgendaModule />}
-        {activeTab === 'usuarios' && <UsuariosModule />}
-        {activeTab === 'reembolsos' && <ReembolsosModule />}
+        {activeTab === 'dashboard'  && <DashboardModule  permissao={perm('dashboard')}  userId={currentProfile?.id} />}
+        {activeTab === 'clientes'   && <ClientesModule   permissao={perm('clientes')}   userId={currentProfile?.id} />}
+        {activeTab === 'contratos'  && <ContratosModule  permissao={perm('contratos')}  userId={currentProfile?.id} />}
+        {activeTab === 'parcelas'   && <ParcelasModule   permissao={perm('parcelas')}   userId={currentProfile?.id} />}
+        {activeTab === 'alocacoes'  && <AlocacoesModule  permissao={perm('alocacoes')}  userId={currentProfile?.id} />}
+        {activeTab === 'emissoes'   && <EmissoesModule   permissao={perm('emissoes')}   userId={currentProfile?.id} />}
+        {activeTab === 'agenda'     && <AgendaModule     permissao={perm('agenda')}     userId={currentProfile?.id} />}
+        {activeTab === 'usuarios'   && <UsuariosModule   />}
+        {activeTab === 'reembolsos' && <ReembolsosModule permissao={perm('reembolsos')} userId={currentProfile?.id} />}
       </main>
 
       {/* ── Modal Minha Conta ──────────────────────────────────────────────── */}

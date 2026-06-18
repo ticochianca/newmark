@@ -12,7 +12,10 @@ const STATUS_COLORS = {
 const fmt = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
 
-export default function ReembolsosModule() {
+export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null }) {
+  const podeAlterar = permissao === 'alterar';
+  const verProprio  = permissao === 'ver_proprio';
+
   const [reembolsos, setReembolsos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filtroStatus, setFiltroStatus] = useState('Todos');
@@ -28,21 +31,16 @@ export default function ReembolsosModule() {
   const [avaliarSaving, setAvaliarSaving] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        supabase.from('profiles').select('id, nome').eq('id', session.user.id).single()
-          .then(({ data }) => setCurrentUser(data));
-      }
-    });
+    supabase.from('profiles').select('id, nome').eq('id', userId).single()
+      .then(({ data }) => { if (data) setCurrentUser(data); });
     fetchReembolsos();
-  }, []);
+  }, [userId, permissao]);
 
   const fetchReembolsos = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('reembolsos')
-      .select('*')
-      .order('created_at', { ascending: false });
+    let query = supabase.from('reembolsos').select('*').order('created_at', { ascending: false });
+    if (verProprio && userId) query = query.eq('usuario_id', userId);
+    const { data, error } = await query;
     if (!error) setReembolsos(data || []);
     setLoading(false);
   };
@@ -149,7 +147,7 @@ export default function ReembolsosModule() {
                 <option key={s}>{s}</option>
               ))}
             </select>
-            <button className="btn btn-primary" onClick={openModal}>+ Novo Reembolso</button>
+            <button className="btn btn-primary" onClick={openModal}>+ Meu Reembolso</button>
           </div>
         </div>
 
@@ -191,7 +189,7 @@ export default function ReembolsosModule() {
                     </td>
                     <td style={{ maxWidth: '180px', fontSize: '12px', color: 'var(--text-muted)' }}>{r.observacao || '—'}</td>
                     <td>
-                      {r.status === 'Pendente' && (
+                      {r.status === 'Pendente' && podeAlterar && (
                         <button
                           className="btn btn-secondary"
                           style={{ fontSize: '11px', padding: '3px 8px' }}
