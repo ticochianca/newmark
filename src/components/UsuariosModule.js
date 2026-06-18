@@ -45,6 +45,7 @@ export default function UsuariosModule() {
   const [permModal, setPermModal] = useState(null);
   const [permForm, setPermForm] = useState({});
   const [permSaving, setPermSaving] = useState(false);
+  const [copiarDeId, setCopiarDeId] = useState('');
 
   const fetchUsuarios = async () => {
     setLoading(true);
@@ -91,6 +92,12 @@ export default function UsuariosModule() {
   const openPermModal = (user) => {
     setPermModal(user);
     setPermForm(user.permissoes || {});
+    setCopiarDeId('');
+  };
+
+  const handleCopiarDe = () => {
+    const fonte = usuarios.find(u => u.id === copiarDeId);
+    if (fonte?.permissoes) setPermForm(fonte.permissoes);
   };
 
   const handleSavePermissoes = async () => {
@@ -191,6 +198,31 @@ export default function UsuariosModule() {
               <button className="close-modal" onClick={() => setPermModal(null)}>&times;</button>
             </div>
             <div className="modal-body" style={{ padding: '0' }}>
+              {/* Copiar de outro usuário */}
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '12px 20px', borderBottom: '1px solid var(--border)', background: '#f8fafc' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>Copiar de:</span>
+                <select
+                  className="form-control"
+                  style={{ fontSize: '12px', padding: '4px 8px' }}
+                  value={copiarDeId}
+                  onChange={e => setCopiarDeId(e.target.value)}
+                >
+                  <option value="">— selecionar usuário —</option>
+                  {usuarios
+                    .filter(u => u.id !== permModal.id && u.perfil !== 'Administrador' && u.permissoes && Object.keys(u.permissoes).length > 0)
+                    .map(u => <option key={u.id} value={u.id}>{u.nome}</option>)
+                  }
+                </select>
+                <button
+                  className="btn btn-secondary"
+                  style={{ fontSize: '12px', padding: '4px 12px', whiteSpace: 'nowrap' }}
+                  disabled={!copiarDeId}
+                  onClick={handleCopiarDe}
+                >
+                  Copiar
+                </button>
+              </div>
+
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr>
