@@ -33,7 +33,8 @@ function fromMins(m) {
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 }
 
-export default function AgendaModule() {
+export default function AgendaModule({ permissao = 'ver_tudo', userId = null }) {
+  const verProprio = permissao === 'ver_proprio';
   const [myId, setMyId] = useState(null);
   const [viewId, setViewId] = useState(null);
   const [usuarios, setUsuarios] = useState([]);
@@ -56,7 +57,7 @@ export default function AgendaModule() {
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) { setMyId(user.id); setViewId(user.id); }
+      if (user) { setMyId(user.id); setViewId(userId || user.id); }
 
       const [{ data: us }, { data: cs }] = await Promise.all([
         supabase.from('profiles').select('id, nome').eq('ativo', true).order('nome'),
@@ -239,18 +240,24 @@ export default function AgendaModule() {
 
       {/* ── Toolbar ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 0 14px', flexShrink: 0 }}>
-        <select
-          className="form-control"
-          style={{ width: '185px' }}
-          value={viewId || ''}
-          onChange={e => setViewId(e.target.value)}
-        >
-          {usuarios.map(u => (
-            <option key={u.id} value={u.id}>
-              {u.id === myId ? `★ ${u.nome}` : u.nome}
-            </option>
-          ))}
-        </select>
+        {verProprio ? (
+          <span style={{ fontWeight: 600, color: 'var(--secondary)', fontSize: '14px', width: '185px' }}>
+            ★ Minha agenda
+          </span>
+        ) : (
+          <select
+            className="form-control"
+            style={{ width: '185px' }}
+            value={viewId || ''}
+            onChange={e => setViewId(e.target.value)}
+          >
+            {usuarios.map(u => (
+              <option key={u.id} value={u.id}>
+                {u.id === myId ? `★ ${u.nome}` : u.nome}
+              </option>
+            ))}
+          </select>
+        )}
 
         <button className="btn btn-secondary" style={{ padding: '6px 11px', fontSize: '18px', lineHeight: 1 }} onClick={prevWeek}>‹</button>
         <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={goToday}>Hoje</button>
