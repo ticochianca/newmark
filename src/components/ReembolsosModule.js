@@ -5,12 +5,30 @@ import { supabase } from '@/lib/supabase';
 
 const STATUS_COLORS = {
   Pendente:  { bg: 'rgba(245,158,11,0.12)',  color: '#d97706' },
-  Aprovado:  { bg: 'rgba(16,185,129,0.12)',  color: '#059669' },
-  Rejeitado: { bg: 'rgba(239,68,68,0.12)',   color: '#dc2626' },
+  Devolvido: { bg: 'rgba(239,68,68,0.12)',   color: '#dc2626' },
+  Pago:      { bg: 'rgba(16,185,129,0.12)',  color: '#059669' },
+  Cancelado: { bg: 'rgba(107,114,128,0.12)', color: '#6b7280' },
 };
 
 const fmt = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
+const fmtDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
+
+function diasUteisDesde(dataStr) {
+  if (!dataStr) return null;
+  const start = new Date(dataStr + 'T12:00:00');
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  if (start >= today) return 0;
+  let count = 0;
+  const d = new Date(start);
+  d.setDate(d.getDate() + 1);
+  while (d <= today) {
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) count++;
+    d.setDate(d.getDate() + 1);
+  }
+  return count;
+}
 
 export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null }) {
   const podeAlterar = permissao === 'alterar';
@@ -26,13 +44,21 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
   const [arquivo, setArquivo] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  const [editModal, setEditModal] = useState(null);
+  const [editForm, setEditForm] = useState({ descricao: '', valor: '' });
+  const [editArquivo, setEditArquivo] = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
+
   const [avaliarModal, setAvaliarModal] = useState(null);
-  const [avaliarObs, setAvaliarObs] = useState('');
+  const [devolverObs, setDevolverObs] = useState('');
+  const [pagarData, setPagarData] = useState('');
   const [avaliarSaving, setAvaliarSaving] = useState(false);
 
   useEffect(() => {
-    supabase.from('profiles').select('id, nome').eq('id', userId).single()
-      .then(({ data }) => { if (data) setCurrentUser(data); });
+    if (userId) {
+      supabase.from('profiles').select('id, nome').eq('id', userId).single()
+        .then(({ data }) => { if (data) setCurrentUser(data); });
+    }
     fetchReembolsos();
   }, [userId, permissao]);
 
@@ -45,6 +71,7 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
     setLoading(false);
   };
 
+  // --- Novo reembolso ---
   const openModal = () => {
     setForm({ descricao: '', valor: '' });
     setArquivo(null);
@@ -63,7 +90,7 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
         descricao: form.descricao.trim(),
         valor,
         status: 'Pendente',
-        usuario_id: currentUser?.id,
+        usuario_id: currentUser?.id || userId,
         usuario_nome: currentUser?.nome || 'Desconhecido',
       }])
       .select()
@@ -88,20 +115,78 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
     setSaving(false);
   };
 
-  const openAvaliar = (r) => {
-    setAvaliarModal(r);
-    setAvaliarObs('');
+  // --- Editar e reenviar (quando Devolvido) ---
+  const openEditModal = (r) => {
+    setEditModal(r);
+    setEditForm({ descricao: r.descricao, valor: String(r.valor).replace('.', ',') });
+    setEditArquivo(null);
   };
 
-  const handleAvaliar = async (novoStatus) => {
+  const handleReenviar = async () => {
+    if (!editForm.descricao.trim()) { alert('Preencha a descrição.'); return; }
+    const valor = parseFloat(editForm.valor.replace(',', '.'));
+    if (!valor || valor <= 0) { alert('Informe um valor válido.'); return; }
+    setEditSaving(true);
+
+    const updates = { descricao: editForm.descricao.trim(), valor, status: 'Pendente', observacao: null };
+
+    if (editArquivo) {
+      const fd = new FormData();
+      fd.append('file', editArquivo);
+      fd.append('reembolsoId', editModal.id);
+      const res = await fetch('/api/reembolsos/upload', { method: 'POST', body: fd });
+      const json = await res.json();
+      if (json.url) updates.documento_url = json.url;
+    }
+
+    const { error } = await supabase.from('reembolsos').update(updates).eq('id', editModal.id);
+    if (error) { alert('Erro ao reenviar: ' + error.message); setEditSaving(false); return; }
+
+    setReembolsos(prev => prev.map(r => r.id === editModal.id ? { ...r, ...updates } : r));
+    setEditModal(null);
+    setEditSaving(false);
+  };
+
+  const handleCancelar = async (r) => {
+    if (!confirm('Cancelar este reembolso definitivamente?')) return;
+    const { error } = await supabase.from('reembolsos').update({ status: 'Cancelado' }).eq('id', r.id);
+    if (error) { alert('Erro: ' + error.message); return; }
+    setReembolsos(prev => prev.map(x => x.id === r.id ? { ...x, status: 'Cancelado' } : x));
+  };
+
+  // --- Avaliar (admin) ---
+  const openAvaliar = (r) => {
+    setAvaliarModal(r);
+    setDevolverObs('');
+    setPagarData(new Date().toISOString().slice(0, 10));
+  };
+
+  const handleDevolver = async () => {
+    if (!devolverObs.trim()) { alert('Descreva o motivo para o colaborador poder corrigir.'); return; }
     setAvaliarSaving(true);
     const { error } = await supabase
       .from('reembolsos')
-      .update({ status: novoStatus, observacao: avaliarObs.trim() || null })
+      .update({ status: 'Devolvido', observacao: devolverObs.trim() })
       .eq('id', avaliarModal.id);
     if (error) { alert('Erro: ' + error.message); setAvaliarSaving(false); return; }
     setReembolsos(prev => prev.map(r => r.id === avaliarModal.id
-      ? { ...r, status: novoStatus, observacao: avaliarObs.trim() || null }
+      ? { ...r, status: 'Devolvido', observacao: devolverObs.trim() }
+      : r
+    ));
+    setAvaliarModal(null);
+    setAvaliarSaving(false);
+  };
+
+  const handlePagar = async () => {
+    if (!pagarData) { alert('Informe a data de pagamento.'); return; }
+    setAvaliarSaving(true);
+    const { error } = await supabase
+      .from('reembolsos')
+      .update({ status: 'Pago', data_pagamento: pagarData })
+      .eq('id', avaliarModal.id);
+    if (error) { alert('Erro: ' + error.message); setAvaliarSaving(false); return; }
+    setReembolsos(prev => prev.map(r => r.id === avaliarModal.id
+      ? { ...r, status: 'Pago', data_pagamento: pagarData }
       : r
     ));
     setAvaliarModal(null);
@@ -112,19 +197,21 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
     ? reembolsos
     : reembolsos.filter(r => r.status === filtroStatus);
 
-  const totalPendente = reembolsos.filter(r => r.status === 'Pendente').reduce((s, r) => s + Number(r.valor), 0);
-
   return (
     <div className="content-area active">
 
       {/* Métricas */}
       <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        {['Pendente', 'Aprovado', 'Rejeitado'].map(s => {
-          const items = reembolsos.filter(r => r.status === s);
+        {[
+          { label: 'Pendentes',  key: 'Pendente'  },
+          { label: 'Devolvidos', key: 'Devolvido' },
+          { label: 'Pagos',      key: 'Pago'      },
+        ].map(({ label, key }) => {
+          const items = reembolsos.filter(r => r.status === key);
           const total = items.reduce((acc, r) => acc + Number(r.valor), 0);
           return (
-            <div key={s} className="metric-card">
-              <h3>{s}s</h3>
+            <div key={key} className="metric-card">
+              <h3>{label}</h3>
               <div className="value">{items.length}</div>
               <span className="trend neutral">{fmt(total)}</span>
             </div>
@@ -143,7 +230,7 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
               value={filtroStatus}
               onChange={e => setFiltroStatus(e.target.value)}
             >
-              {['Todos', 'Pendente', 'Aprovado', 'Rejeitado'].map(s => (
+              {['Todos', 'Pendente', 'Devolvido', 'Pago', 'Cancelado'].map(s => (
                 <option key={s}>{s}</option>
               ))}
             </select>
@@ -166,17 +253,20 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
                 <th>Comprovante</th>
                 <th>Status</th>
                 <th>Observação</th>
+                <th>Pagamento</th>
                 <th>Ações</th>
               </tr>
             </thead>
             <tbody>
               {lista.map(r => {
                 const sc = STATUS_COLORS[r.status] || STATUS_COLORS.Pendente;
+                const du = r.status === 'Pago' ? diasUteisDesde(r.data_pagamento) : null;
+                const ehDono = r.usuario_id === userId;
                 return (
                   <tr key={r.id}>
                     <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(r.created_at)}</td>
                     <td>{r.usuario_nome || '—'}</td>
-                    <td style={{ maxWidth: '260px' }}>{r.descricao}</td>
+                    <td style={{ maxWidth: '220px' }}>{r.descricao}</td>
                     <td style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{fmt(r.valor)}</td>
                     <td>
                       {r.documento_url
@@ -187,17 +277,41 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
                     <td>
                       <span className="badge" style={{ background: sc.bg, color: sc.color }}>{r.status}</span>
                     </td>
-                    <td style={{ maxWidth: '180px', fontSize: '12px', color: 'var(--text-muted)' }}>{r.observacao || '—'}</td>
+                    <td style={{ maxWidth: '160px', fontSize: '12px', color: 'var(--text-muted)' }}>{r.observacao || '—'}</td>
+                    <td style={{ whiteSpace: 'nowrap', fontSize: '12px' }}>
+                      {r.data_pagamento ? (
+                        <>
+                          {fmtDate(r.data_pagamento)}
+                          {du !== null && (
+                            <span style={{ color: 'var(--text-muted)', marginLeft: '4px' }}>
+                              {du === 0 ? '(hoje)' : `(${du} d.u.)`}
+                            </span>
+                          )}
+                        </>
+                      ) : '—'}
+                    </td>
                     <td>
-                      {r.status === 'Pendente' && podeAlterar && (
-                        <button
-                          className="btn btn-secondary"
-                          style={{ fontSize: '11px', padding: '3px 8px' }}
-                          onClick={() => openAvaliar(r)}
-                        >
-                          Avaliar
-                        </button>
-                      )}
+                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                        {r.status === 'Pendente' && podeAlterar && (
+                          <button className="btn btn-secondary" style={{ fontSize: '11px', padding: '3px 8px' }} onClick={() => openAvaliar(r)}>
+                            Avaliar
+                          </button>
+                        )}
+                        {r.status === 'Devolvido' && ehDono && (
+                          <>
+                            <button className="btn btn-primary" style={{ fontSize: '11px', padding: '3px 8px' }} onClick={() => openEditModal(r)}>
+                              Editar e Reenviar
+                            </button>
+                            <button
+                              className="btn btn-secondary"
+                              style={{ fontSize: '11px', padding: '3px 8px', color: '#dc2626', borderColor: 'rgba(239,68,68,0.3)' }}
+                              onClick={() => handleCancelar(r)}
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -218,42 +332,61 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
             <div className="modal-body">
               <div className="form-group">
                 <label>Descrição *</label>
-                <textarea
-                  className="form-control"
-                  rows={3}
-                  placeholder="Descreva a despesa reembolsável..."
-                  value={form.descricao}
-                  onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))}
-                />
+                <textarea className="form-control" rows={3} placeholder="Descreva a despesa reembolsável..." value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} />
               </div>
               <div className="form-group">
                 <label>Valor total (R$) *</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  placeholder="0,00"
-                  value={form.valor}
-                  onChange={e => setForm(f => ({ ...f, valor: e.target.value.replace(/[^\d,\.]/g, '') }))}
-                />
+                <input type="text" className="form-control" placeholder="0,00" value={form.valor} onChange={e => setForm(f => ({ ...f, valor: e.target.value.replace(/[^\d,\.]/g, '') }))} />
               </div>
               <div className="form-group">
                 <label>Comprovante / Documento</label>
-                <input
-                  type="file"
-                  className="form-control"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={e => setArquivo(e.target.files[0] || null)}
-                />
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  PDF, JPG ou PNG
-                </div>
+                <input type="file" className="form-control" accept=".pdf,.jpg,.jpeg,.png" onChange={e => setArquivo(e.target.files[0] || null)} />
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>PDF, JPG ou PNG</div>
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setModalOpen(false)}>Cancelar</button>
-              <button className="btn btn-primary" onClick={handleSubmit} disabled={saving}>
-                {saving ? 'Salvando...' : 'Enviar solicitação'}
-              </button>
+              <button className="btn btn-primary" onClick={handleSubmit} disabled={saving}>{saving ? 'Salvando...' : 'Enviar solicitação'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal — Editar e Reenviar */}
+      {editModal && (
+        <div className="modal-overlay active" onClick={() => setEditModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Editar e Reenviar</h2>
+              <button className="close-modal" onClick={() => setEditModal(null)}>×</button>
+            </div>
+            <div className="modal-body">
+              {editModal.observacao && (
+                <div style={{ background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '6px', padding: '12px', marginBottom: '16px', fontSize: '13px', color: '#dc2626' }}>
+                  <strong>Motivo da devolução:</strong> {editModal.observacao}
+                </div>
+              )}
+              <div className="form-group">
+                <label>Descrição *</label>
+                <textarea className="form-control" rows={3} value={editForm.descricao} onChange={e => setEditForm(f => ({ ...f, descricao: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label>Valor total (R$) *</label>
+                <input type="text" className="form-control" value={editForm.valor} onChange={e => setEditForm(f => ({ ...f, valor: e.target.value.replace(/[^\d,\.]/g, '') }))} />
+              </div>
+              <div className="form-group">
+                <label>Substituir comprovante</label>
+                <input type="file" className="form-control" accept=".pdf,.jpg,.jpeg,.png" onChange={e => setEditArquivo(e.target.files[0] || null)} />
+                {editModal.documento_url && !editArquivo && (
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    <a href={editModal.documento_url} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)' }}>Ver comprovante atual</a>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setEditModal(null)}>Cancelar</button>
+              <button className="btn btn-primary" onClick={handleReenviar} disabled={editSaving}>{editSaving ? 'Enviando...' : 'Reenviar solicitação'}</button>
             </div>
           </div>
         </div>
@@ -262,52 +395,67 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
       {/* Modal — Avaliar */}
       {avaliarModal && (
         <div className="modal-overlay active" onClick={() => setAvaliarModal(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '460px' }}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '480px' }}>
             <div className="modal-header">
               <h2>Avaliar Reembolso</h2>
               <button className="close-modal" onClick={() => setAvaliarModal(null)}>×</button>
             </div>
             <div className="modal-body">
-              <div style={{ marginBottom: '16px', padding: '12px', background: 'var(--bg-dark)', borderRadius: '6px', fontSize: '13px' }}>
+              {/* Resumo */}
+              <div style={{ marginBottom: '20px', padding: '12px', background: 'var(--bg-dark)', borderRadius: '6px', fontSize: '13px' }}>
                 <div style={{ fontWeight: 600, marginBottom: '4px' }}>{avaliarModal.usuario_nome}</div>
                 <div style={{ marginBottom: '4px' }}>{avaliarModal.descricao}</div>
                 <div style={{ fontWeight: 700, color: 'var(--secondary)' }}>{fmt(avaliarModal.valor)}</div>
                 {avaliarModal.documento_url && (
-                  <a href={avaliarModal.documento_url} target="_blank" rel="noreferrer"
-                    style={{ color: 'var(--primary)', fontSize: '12px', display: 'inline-block', marginTop: '6px' }}>
+                  <a href={avaliarModal.documento_url} target="_blank" rel="noreferrer" style={{ color: 'var(--primary)', fontSize: '12px', display: 'inline-block', marginTop: '6px' }}>
                     Ver comprovante →
                   </a>
                 )}
               </div>
-              <div className="form-group">
-                <label>Observação (opcional)</label>
-                <textarea
-                  className="form-control"
-                  rows={2}
-                  placeholder="Motivo de aprovação ou rejeição..."
-                  value={avaliarObs}
-                  onChange={e => setAvaliarObs(e.target.value)}
-                />
+
+              {/* Seção: Devolver */}
+              <div style={{ border: '1px solid rgba(239,68,68,0.25)', borderRadius: '8px', padding: '16px', marginBottom: '12px' }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '10px', color: '#dc2626' }}>Devolver para revisão</div>
+                <div className="form-group" style={{ marginBottom: '10px' }}>
+                  <textarea
+                    className="form-control"
+                    rows={2}
+                    placeholder="Descreva o que o colaborador precisa corrigir..."
+                    value={devolverObs}
+                    onChange={e => setDevolverObs(e.target.value)}
+                  />
+                </div>
+                <button
+                  className="btn"
+                  style={{ background: 'rgba(239,68,68,0.1)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.3)', width: '100%' }}
+                  onClick={handleDevolver}
+                  disabled={avaliarSaving}
+                >
+                  Devolver
+                </button>
+              </div>
+
+              <div style={{ textAlign: 'center', fontSize: '11px', color: 'var(--text-muted)', margin: '4px 0 12px' }}>ou</div>
+
+              {/* Seção: Pagar */}
+              <div style={{ border: '1px solid rgba(16,185,129,0.25)', borderRadius: '8px', padding: '16px' }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '10px', color: '#059669' }}>Marcar como Pago</div>
+                <div className="form-group" style={{ marginBottom: '10px' }}>
+                  <label style={{ fontSize: '12px' }}>Data de pagamento</label>
+                  <input type="date" className="form-control" value={pagarData} onChange={e => setPagarData(e.target.value)} />
+                </div>
+                <button
+                  className="btn btn-primary"
+                  style={{ background: '#059669', width: '100%' }}
+                  onClick={handlePagar}
+                  disabled={avaliarSaving}
+                >
+                  {avaliarSaving ? 'Salvando...' : 'Marcar como Pago'}
+                </button>
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setAvaliarModal(null)}>Cancelar</button>
-              <button
-                className="btn"
-                style={{ background: 'rgba(239,68,68,0.1)', color: '#dc2626', border: '1px solid rgba(239,68,68,0.3)' }}
-                onClick={() => handleAvaliar('Rejeitado')}
-                disabled={avaliarSaving}
-              >
-                Rejeitar
-              </button>
-              <button
-                className="btn btn-primary"
-                style={{ background: '#059669' }}
-                onClick={() => handleAvaliar('Aprovado')}
-                disabled={avaliarSaving}
-              >
-                Aprovar
-              </button>
+              <button className="btn btn-secondary" onClick={() => setAvaliarModal(null)}>Fechar</button>
             </div>
           </div>
         </div>
