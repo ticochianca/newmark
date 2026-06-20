@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 function LineChart({ dados }) {
   if (!dados || dados.length === 0) return null;
 
-  const W = 620, H = 210, PL = 72, PR = 20, PT = 28, PB = 38;
+  const W = 600, H = 130, PL = 56, PR = 16, PT = 16, PB = 28;
   const cW = W - PL - PR;
   const cH = H - PT - PB;
 
@@ -19,34 +19,26 @@ function LineChart({ dados }) {
   const linePath = (key) =>
     dados.map((d, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(d[key]).toFixed(1)}`).join(' ');
 
-  const fmtY = (v) => v >= 1000 ? `R$${(v / 1000).toFixed(0)}k` : `R$${v}`;
-  const yTicks = [0, niceMax * 0.25, niceMax * 0.5, niceMax * 0.75, niceMax];
+  const fmtY = (v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${v}`;
+  const yTicks = [0, niceMax * 0.5, niceMax];
   const li = dados.length - 1;
-  const colW = cW / dados.length;
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
       {/* Grid + Y labels */}
       {yTicks.map((v, i) => (
         <g key={i}>
-          <line x1={PL} y1={yOf(v)} x2={W - PR} y2={yOf(v)} stroke="#e2e8f0" strokeWidth="1" />
-          <text x={PL - 6} y={yOf(v) + 4} textAnchor="end" fontSize="10" fill="#94a3b8">{fmtY(v)}</text>
+          <line x1={PL} y1={yOf(v)} x2={W - PR} y2={yOf(v)} stroke="#f1f5f9" strokeWidth="1" />
+          <text x={PL - 5} y={yOf(v) + 3.5} textAnchor="end" fontSize="9" fill="#cbd5e1">{fmtY(v)}</text>
         </g>
       ))}
 
-      {/* Highlight current month column */}
-      <rect
-        x={xOf(li) - colW / 2} y={PT}
-        width={colW} height={cH}
-        fill="rgba(16,185,129,0.05)" rx="3"
-      />
+      {/* Expectativa line (dashed) */}
+      <path d={linePath('esperado')} fill="none" stroke="#93c5fd" strokeWidth="1.2"
+        strokeDasharray="4,3" strokeLinejoin="round" />
 
-      {/* Expectativa line (dashed, blue) */}
-      <path d={linePath('esperado')} fill="none" stroke="#3b82f6" strokeWidth="1.8"
-        strokeDasharray="5,4" strokeLinejoin="round" opacity="0.8" />
-
-      {/* Recebido line (solid, green) */}
-      <path d={linePath('recebido')} fill="none" stroke="#10b981" strokeWidth="2.5"
+      {/* Recebido line (solid) */}
+      <path d={linePath('recebido')} fill="none" stroke="#34d399" strokeWidth="1.8"
         strokeLinejoin="round" />
 
       {/* Dots + X labels */}
@@ -54,47 +46,29 @@ function LineChart({ dados }) {
         const isCurrent = i === li;
         return (
           <g key={i}>
-            {/* Expectativa dot */}
-            <circle cx={xOf(i)} cy={yOf(d.esperado)} r="3.5"
-              fill="white" stroke="#3b82f6" strokeWidth="1.5" opacity="0.85" />
-            {/* Recebido dot */}
-            <circle cx={xOf(i)} cy={yOf(d.recebido)} r={isCurrent ? 5 : 4}
-              fill="#10b981" stroke={isCurrent ? 'white' : 'none'} strokeWidth={isCurrent ? 1.5 : 0} />
-            {/* X label */}
+            <circle cx={xOf(i)} cy={yOf(d.esperado)} r="2"
+              fill="white" stroke="#93c5fd" strokeWidth="1" />
+            <circle cx={xOf(i)} cy={yOf(d.recebido)} r={isCurrent ? 3.5 : 2.5}
+              fill={isCurrent ? '#10b981' : '#34d399'}
+              stroke="white" strokeWidth={isCurrent ? 1.5 : 1} />
             <text
-              x={xOf(i)} y={H - 8}
-              textAnchor="middle" fontSize="11"
+              x={xOf(i)} y={H - 4}
+              textAnchor="middle" fontSize="9.5"
               fill={isCurrent ? '#10b981' : '#94a3b8'}
-              fontWeight={isCurrent ? 700 : 400}
+              fontWeight={isCurrent ? 600 : 400}
             >
               {d.label}
             </text>
-            {/* Current month tooltip values */}
-            {isCurrent && (
-              <>
-                <text x={xOf(i) + 8} y={yOf(d.recebido) - 6} fontSize="9.5" fill="#10b981" fontWeight="700">
-                  {`R$${(d.recebido / 1000).toFixed(1)}k`}
-                </text>
-                {d.esperado > d.recebido && (
-                  <text x={xOf(i) + 8} y={yOf(d.esperado) - 6} fontSize="9.5" fill="#3b82f6" opacity="0.9">
-                    {`R$${(d.esperado / 1000).toFixed(1)}k`}
-                  </text>
-                )}
-              </>
-            )}
           </g>
         );
       })}
 
-      {/* Legend */}
-      <g transform={`translate(${PL}, 10)`}>
-        <line x1="0" y1="5" x2="18" y2="5" stroke="#10b981" strokeWidth="2.5" />
-        <circle cx="9" cy="5" r="3" fill="#10b981" />
-        <text x="22" y="9" fontSize="10" fill="#64748b">Recebido</text>
-
-        <line x1="96" y1="5" x2="114" y2="5" stroke="#3b82f6" strokeWidth="1.8" strokeDasharray="4,3" />
-        <circle cx="105" cy="5" r="3" fill="white" stroke="#3b82f6" strokeWidth="1.5" opacity="0.85" />
-        <text x="118" y="9" fontSize="10" fill="#64748b">Expectativa</text>
+      {/* Legend — top right */}
+      <g transform={`translate(${W - PR - 160}, 6)`}>
+        <line x1="0" y1="4" x2="12" y2="4" stroke="#34d399" strokeWidth="1.8" />
+        <text x="16" y="7.5" fontSize="9" fill="#94a3b8">Recebido</text>
+        <line x1="72" y1="4" x2="84" y2="4" stroke="#93c5fd" strokeWidth="1.2" strokeDasharray="3,2" />
+        <text x="88" y="7.5" fontSize="9" fill="#94a3b8">Expectativa</text>
       </g>
     </svg>
   );
@@ -258,10 +232,9 @@ export default function DashboardModule() {
     <section className="content-area active">
 
       {/* Gráfico de Recebimentos */}
-      <div className="table-container" style={{ marginBottom: '24px', padding: '20px 24px 12px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <span style={{ fontWeight: 600, fontSize: '14px', color: 'var(--secondary)' }}>Recebimentos — últimos 6 meses</span>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Mês atual destacado</span>
+      <div className="table-container" style={{ marginBottom: '20px', padding: '14px 20px 10px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Recebimentos · 6 meses</span>
         </div>
         <LineChart dados={historicoMeses} />
       </div>
