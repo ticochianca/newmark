@@ -3,6 +3,103 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 
+function LineChart({ dados }) {
+  if (!dados || dados.length === 0) return null;
+
+  const W = 620, H = 210, PL = 72, PR = 20, PT = 28, PB = 38;
+  const cW = W - PL - PR;
+  const cH = H - PT - PB;
+
+  const maxVal = Math.max(...dados.flatMap(d => [d.recebido, d.esperado]), 1);
+  const niceMax = Math.ceil(maxVal / 5000) * 5000 || 10000;
+
+  const xOf = (i) => PL + (i / Math.max(dados.length - 1, 1)) * cW;
+  const yOf = (v) => PT + cH - (Math.min(v, niceMax) / niceMax) * cH;
+
+  const linePath = (key) =>
+    dados.map((d, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(d[key]).toFixed(1)}`).join(' ');
+
+  const fmtY = (v) => v >= 1000 ? `R$${(v / 1000).toFixed(0)}k` : `R$${v}`;
+  const yTicks = [0, niceMax * 0.25, niceMax * 0.5, niceMax * 0.75, niceMax];
+  const li = dados.length - 1;
+  const colW = cW / dados.length;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+      {/* Grid + Y labels */}
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={PL} y1={yOf(v)} x2={W - PR} y2={yOf(v)} stroke="#e2e8f0" strokeWidth="1" />
+          <text x={PL - 6} y={yOf(v) + 4} textAnchor="end" fontSize="10" fill="#94a3b8">{fmtY(v)}</text>
+        </g>
+      ))}
+
+      {/* Highlight current month column */}
+      <rect
+        x={xOf(li) - colW / 2} y={PT}
+        width={colW} height={cH}
+        fill="rgba(16,185,129,0.05)" rx="3"
+      />
+
+      {/* Expectativa line (dashed, blue) */}
+      <path d={linePath('esperado')} fill="none" stroke="#3b82f6" strokeWidth="1.8"
+        strokeDasharray="5,4" strokeLinejoin="round" opacity="0.8" />
+
+      {/* Recebido line (solid, green) */}
+      <path d={linePath('recebido')} fill="none" stroke="#10b981" strokeWidth="2.5"
+        strokeLinejoin="round" />
+
+      {/* Dots + X labels */}
+      {dados.map((d, i) => {
+        const isCurrent = i === li;
+        return (
+          <g key={i}>
+            {/* Expectativa dot */}
+            <circle cx={xOf(i)} cy={yOf(d.esperado)} r="3.5"
+              fill="white" stroke="#3b82f6" strokeWidth="1.5" opacity="0.85" />
+            {/* Recebido dot */}
+            <circle cx={xOf(i)} cy={yOf(d.recebido)} r={isCurrent ? 5 : 4}
+              fill="#10b981" stroke={isCurrent ? 'white' : 'none'} strokeWidth={isCurrent ? 1.5 : 0} />
+            {/* X label */}
+            <text
+              x={xOf(i)} y={H - 8}
+              textAnchor="middle" fontSize="11"
+              fill={isCurrent ? '#10b981' : '#94a3b8'}
+              fontWeight={isCurrent ? 700 : 400}
+            >
+              {d.label}
+            </text>
+            {/* Current month tooltip values */}
+            {isCurrent && (
+              <>
+                <text x={xOf(i) + 8} y={yOf(d.recebido) - 6} fontSize="9.5" fill="#10b981" fontWeight="700">
+                  {`R$${(d.recebido / 1000).toFixed(1)}k`}
+                </text>
+                {d.esperado > d.recebido && (
+                  <text x={xOf(i) + 8} y={yOf(d.esperado) - 6} fontSize="9.5" fill="#3b82f6" opacity="0.9">
+                    {`R$${(d.esperado / 1000).toFixed(1)}k`}
+                  </text>
+                )}
+              </>
+            )}
+          </g>
+        );
+      })}
+
+      {/* Legend */}
+      <g transform={`translate(${PL}, 10)`}>
+        <line x1="0" y1="5" x2="18" y2="5" stroke="#10b981" strokeWidth="2.5" />
+        <circle cx="9" cy="5" r="3" fill="#10b981" />
+        <text x="22" y="9" fontSize="10" fill="#64748b">Recebido</text>
+
+        <line x1="96" y1="5" x2="114" y2="5" stroke="#3b82f6" strokeWidth="1.8" strokeDasharray="4,3" />
+        <circle cx="105" cy="5" r="3" fill="white" stroke="#3b82f6" strokeWidth="1.5" opacity="0.85" />
+        <text x="118" y="9" fontSize="10" fill="#64748b">Expectativa</text>
+      </g>
+    </svg>
+  );
+}
+
 export default function DashboardModule() {
   const [metrics, setMetrics] = useState({
     clientesAtivos: 0,
@@ -14,12 +111,13 @@ export default function DashboardModule() {
   const [alertas, setAlertas] = useState([]);
   const [prospeccoes, setProspeccoes] = useState([]);
   const [alertasIPCA, setAlertasIPCA] = useState([]);
+  const [historicoMeses, setHistoricoMeses] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       setLoading(true);
-      
+
       const hoje = new Date();
       const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().split('T')[0];
       const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).toISOString().split('T')[0];
@@ -27,7 +125,7 @@ export default function DashboardModule() {
 
       // Clientes Ativos
       const { count: cliCount } = await supabase.from('clientes').select('*', { count: 'exact', head: true }).eq('status', 'Ativo');
-      
+
       // Contratos Ativos
       const { count: contCount } = await supabase.from('contratos').select('*', { count: 'exact', head: true }).eq('status', 'Em andamento');
 
@@ -45,6 +143,29 @@ export default function DashboardModule() {
           else aReceber += p.valor;
         });
       }
+
+      // Histórico 6 meses para o gráfico
+      const seisAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1);
+      const { data: parcelasHistorico } = await supabase.from('parcelas')
+        .select('valor, status, data_vencimento')
+        .gte('data_vencimento', seisAtras.toISOString().split('T')[0])
+        .lte('data_vencimento', ultimoDiaMes);
+
+      const mesesData = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+        const mes0 = String(d.getMonth() + 1).padStart(2, '0');
+        const prefix = `${d.getFullYear()}-${mes0}`;
+        const labelRaw = d.toLocaleString('pt-BR', { month: 'short' }).replace('.', '');
+        const label = labelRaw.charAt(0).toUpperCase() + labelRaw.slice(1);
+
+        const parcMes = (parcelasHistorico || []).filter(p => p.data_vencimento?.startsWith(prefix));
+        const rec = parcMes.filter(p => p.status === 'Paga').reduce((s, p) => s + Number(p.valor), 0);
+        const esp = parcMes.reduce((s, p) => s + Number(p.valor), 0);
+
+        mesesData.push({ label, recebido: rec, esperado: esp });
+      }
+      setHistoricoMeses(mesesData);
 
       // Alertas (Atrasadas)
       const { data: atrasadas } = await supabase.from('parcelas')
@@ -84,7 +205,8 @@ export default function DashboardModule() {
         }));
         setProspeccoes(pMapped);
       }
-      // Alertas IPCA - Contratos Partido Fixo com valor fixo há 10+ meses
+
+      // Alertas IPCA
       const { data: contratoPartido } = await supabase.from('contratos')
         .select('id, titulo, tipo_cobranca, valor_total, data_inicio, historico_valores, clientes(nome, apelido)')
         .eq('tipo_cobranca', 'partido_fixo')
@@ -93,7 +215,6 @@ export default function DashboardModule() {
       if (contratoPartido && contratoPartido.length > 0) {
         const ipcaAlertas = [];
         for (const c of contratoPartido) {
-          // Use last reajuste date if exists, otherwise contract start date
           let sinceDate;
           if (c.historico_valores && c.historico_valores.length > 0) {
             const lastReajuste = c.historico_valores[c.historico_valores.length - 1];
@@ -135,6 +256,16 @@ export default function DashboardModule() {
 
   return (
     <section className="content-area active">
+
+      {/* Gráfico de Recebimentos */}
+      <div className="table-container" style={{ marginBottom: '24px', padding: '20px 24px 12px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <span style={{ fontWeight: 600, fontSize: '14px', color: 'var(--secondary)' }}>Recebimentos — últimos 6 meses</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Mês atual destacado</span>
+        </div>
+        <LineChart dados={historicoMeses} />
+      </div>
+
       <div className="metrics-grid">
         <div className="metric-card">
           <h3>Clientes Ativos</h3>
