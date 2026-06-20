@@ -52,6 +52,7 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
   const [avaliarModal, setAvaliarModal] = useState(null);
   const [devolverObs, setDevolverObs] = useState('');
   const [pagarData, setPagarData] = useState('');
+  const [pagarObs, setPagarObs] = useState('');
   const [avaliarSaving, setAvaliarSaving] = useState(false);
 
   useEffect(() => {
@@ -192,6 +193,7 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
     setAvaliarModal(r);
     setDevolverObs('');
     setPagarData(new Date().toISOString().slice(0, 10));
+    setPagarObs('');
   };
 
   const handleDevolver = async () => {
@@ -214,22 +216,23 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
     if (!pagarData) { alert('Informe a data de pagamento.'); return; }
     setAvaliarSaving(true);
 
+    const obs = pagarObs.trim() || null;
     if (avaliarModal._tipo === 'prospeccao') {
       const { error } = await supabase
         .from('contratos')
-        .update({ prospeccao_status: 'Pago' })
+        .update({ prospeccao_status: 'Pago', ...(obs ? { prospeccao_obs: obs } : {}) })
         .eq('id', avaliarModal._contratoId);
       if (error) { alert('Erro: ' + error.message); setAvaliarSaving(false); return; }
     } else {
       const { error } = await supabase
         .from('reembolsos')
-        .update({ status: 'Pago', data_pagamento: pagarData })
+        .update({ status: 'Pago', data_pagamento: pagarData, observacao: obs })
         .eq('id', avaliarModal.id);
       if (error) { alert('Erro: ' + error.message); setAvaliarSaving(false); return; }
     }
 
     setItens(prev => prev.map(r => r.id === avaliarModal.id
-      ? { ...r, status: 'Pago', data_pagamento: pagarData }
+      ? { ...r, status: 'Pago', data_pagamento: pagarData, observacao: obs }
       : r
     ));
     setAvaliarModal(null);
@@ -331,7 +334,12 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
                     <td>
                       <span className="badge" style={{ background: sc.bg, color: sc.color }}>{r.status}</span>
                     </td>
-                    <td style={{ maxWidth: '160px', fontSize: '12px', color: 'var(--text-muted)' }}>{r.observacao || '—'}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      {r.observacao
+                        ? <span title={r.observacao} style={{ cursor: 'default', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '18px', height: '18px', borderRadius: '50%', background: 'rgba(59,130,246,0.12)', color: '#2563eb', fontSize: '11px', fontWeight: 700, fontStyle: 'italic' }}>i</span>
+                        : <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
+                      }
+                    </td>
                     <td style={{ whiteSpace: 'nowrap', fontSize: '12px' }}>
                       {r.data_pagamento ? (
                         <>
@@ -500,6 +508,16 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
                 <div className="form-group" style={{ marginBottom: '10px' }}>
                   <label style={{ fontSize: '12px' }}>Data de pagamento</label>
                   <input type="date" className="form-control" value={pagarData} onChange={e => setPagarData(e.target.value)} />
+                </div>
+                <div className="form-group" style={{ marginBottom: '10px' }}>
+                  <label style={{ fontSize: '12px' }}>Observação (opcional)</label>
+                  <textarea
+                    className="form-control"
+                    rows={2}
+                    placeholder="Ex: Pago via TED, número do comprovante..."
+                    value={pagarObs}
+                    onChange={e => setPagarObs(e.target.value)}
+                  />
                 </div>
                 <button
                   className="btn btn-primary"
