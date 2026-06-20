@@ -71,10 +71,11 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
 
     let pq = supabase
       .from('contratos')
-      .select('id, prospeccao_usuario_id, prospeccao_valor, prospeccao_data, prospeccao_obs, prospeccao_status, prospeccao_pago_em, clientes(apelido, nome)')
+      .select('id, prospeccao_usuario_id, prospeccao_valor, prospeccao_data, prospeccao_obs, prospeccao_status, clientes(apelido, nome)')
       .eq('tem_prospeccao', true);
     if (verProprio && userId) pq = pq.eq('prospeccao_usuario_id', userId);
-    const { data: pros } = await pq;
+    const { data: pros, error: prosErr } = await pq;
+    if (prosErr) console.error('Erro ao buscar prospecções:', prosErr.message);
 
     const { data: profs } = await supabase.from('profiles').select('id, nome');
     const nomeMap = Object.fromEntries((profs || []).map(p => [p.id, p.nome]));
@@ -89,7 +90,7 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
       descricao: c.clientes?.apelido || c.clientes?.nome || 'Contrato sem cliente',
       valor: c.prospeccao_valor,
       status: c.prospeccao_status || 'Pendente',
-      data_pagamento: c.prospeccao_pago_em,
+      data_pagamento: null,
       documento_url: null,
       observacao: c.prospeccao_obs,
     }));
@@ -216,7 +217,7 @@ export default function ReembolsosModule({ permissao = 'ver_tudo', userId = null
     if (avaliarModal._tipo === 'prospeccao') {
       const { error } = await supabase
         .from('contratos')
-        .update({ prospeccao_status: 'Pago', prospeccao_pago_em: pagarData })
+        .update({ prospeccao_status: 'Pago' })
         .eq('id', avaliarModal._contratoId);
       if (error) { alert('Erro: ' + error.message); setAvaliarSaving(false); return; }
     } else {
