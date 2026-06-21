@@ -137,7 +137,6 @@ function LineChart({ dados }) {
 export default function DashboardModule() {
   const [metrics, setMetrics] = useState({ clientesAtivos: 0, contratosAtivos: 0, recebidoMes: 0, aReceberMes: 0, atrasadasCount: 0 });
   const [alertas, setAlertas] = useState([]);
-  const [prospeccoes, setProspeccoes] = useState([]);
   const [alertasIPCA, setAlertasIPCA] = useState([]);
   const [historicoMeses, setHistoricoMeses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -158,8 +157,6 @@ export default function DashboardModule() {
         { data: parcelasHist },
         { data: parcelasHistPagas },
         { data: atrasadas },
-        { data: profilesData },
-        { data: prospec },
         { data: contratoPartido },
       ] = await Promise.all([
         supabase.from('clientes').select('*', { count: 'exact', head: true }).eq('status', 'Ativo'),
@@ -172,9 +169,6 @@ export default function DashboardModule() {
           .eq('status', 'Paga').gte('data_pagamento', histStart).lte('data_pagamento', ultimoDiaMes),
         supabase.from('parcelas').select('id, valor, data_vencimento, contratos(titulo, clientes(nome, apelido))')
           .lt('data_vencimento', hojeStr).neq('status', 'Paga').neq('status', 'Congelada').order('data_vencimento', { ascending: true }).limit(5),
-        supabase.from('profiles').select('id, nome'),
-        supabase.from('contratos').select('id, titulo, prospeccao_valor, prospeccao_data, prospeccao_usuario_id, prospeccao_obs, clientes(nome, apelido)')
-          .eq('tem_prospeccao', true).eq('prospeccao_status', 'Pendente').order('prospeccao_data', { ascending: true }).limit(5),
         supabase.from('contratos').select('id, titulo, tipo_cobranca, valor_total, data_inicio, historico_valores, clientes(nome, apelido)')
           .eq('tipo_cobranca', 'partido_fixo').eq('status', 'Em andamento'),
       ]);
@@ -201,8 +195,6 @@ export default function DashboardModule() {
         };
       });
 
-      const profilesMap = Object.fromEntries((profilesData || []).map(p => [p.id, p.nome]));
-
       const ipcaAlertas = [];
       for (const c of (contratoPartido || [])) {
         const sinceDate = c.historico_valores?.length
@@ -218,7 +210,6 @@ export default function DashboardModule() {
       setMetrics({ clientesAtivos: cliCount||0, contratosAtivos: contCount||0, recebidoMes: recebido, aReceberMes: aReceber, atrasadasCount: atrasadas?.length||0 });
       setHistoricoMeses(mesesData);
       setAlertas(atrasadas || []);
-      setProspeccoes((prospec || []).map(p => ({ ...p, favorecido_nome: profilesMap[p.prospeccao_usuario_id] || 'Desconhecido' })));
       setAlertasIPCA(ipcaAlertas);
       setLoading(false);
     };
@@ -276,31 +267,6 @@ export default function DashboardModule() {
                       <td>{new Date(a.data_vencimento).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}</td>
                       <td>R$ {a.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                       <td><span className="badge badge-danger">Em atraso</span></td>
-                    </tr>
-                  ))
-                }
-              </tbody>
-            </table>
-          </div>
-
-          <div className="table-container">
-            <div className="table-header">
-              <span className="table-title" style={{ color: '#d97706' }}>💸 Prospecções a Pagar</span>
-            </div>
-            <table>
-              <thead><tr><th>Cliente / Contrato</th><th>Favorecido</th><th>Vencimento</th><th>Valor</th></tr></thead>
-              <tbody>
-                {prospeccoes.length === 0
-                  ? <tr><td colSpan="4" style={{ textAlign: 'center', padding: '28px', color: 'var(--text-muted)' }}>Nenhuma comissão pendente.</td></tr>
-                  : prospeccoes.map(p => (
-                    <tr key={p.id}>
-                      <td>
-                        <strong style={{ color: 'var(--secondary)', display: 'block' }}>{p.clientes?.apelido || p.clientes?.nome}</strong>
-                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{p.titulo}</span>
-                      </td>
-                      <td>{p.favorecido_nome}</td>
-                      <td>{p.prospeccao_data ? new Date(p.prospeccao_data).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : '—'}</td>
-                      <td><strong style={{ color: '#b45309' }}>R$ {p.prospeccao_valor?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong></td>
                     </tr>
                   ))
                 }
