@@ -6,7 +6,8 @@ import { supabase } from '@/lib/supabase';
 function LineChart({ dados }) {
   if (!dados || dados.length === 0) return null;
 
-  const W = 600, H = 160, PL = 58, PR = 16, PT = 34, PB = 28;
+  // viewBox is 600 wide; chart renders ~2x wider, so SVG font sizes must be ~half target px
+  const W = 600, H = 110, PL = 42, PR = 12, PT = 22, PB = 20;
   const cW = W - PL - PR;
   const cH = H - PT - PB;
 
@@ -21,60 +22,58 @@ function LineChart({ dados }) {
 
   const fmtY = (v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${v}`;
   const fmtLabel = (v) => v > 0
-    ? (v / 1000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' K'
+    ? (v / 1000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + 'K'
     : '';
   const yTicks = [0, niceMax * 0.5, niceMax];
   const li = dados.length - 1;
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
-      {/* Grid + Y labels */}
       {yTicks.map((v, i) => (
         <g key={i}>
-          <line x1={PL} y1={yOf(v)} x2={W - PR} y2={yOf(v)} stroke="#f1f5f9" strokeWidth="1" />
-          <text x={PL - 6} y={yOf(v) + 4} textAnchor="end" fontSize="11" fill="#cbd5e1">{fmtY(v)}</text>
+          <line x1={PL} y1={yOf(v)} x2={W - PR} y2={yOf(v)} stroke="#f1f5f9" strokeWidth="0.8" />
+          <text x={PL - 4} y={yOf(v) + 3.5} textAnchor="end" fontSize="6" fill="#cbd5e1">{fmtY(v)}</text>
         </g>
       ))}
 
-      {/* Expectativa line (dashed) */}
-      <path d={linePath('esperado')} fill="none" stroke="#93c5fd" strokeWidth="1.2"
-        strokeDasharray="4,3" strokeLinejoin="round" />
+      {/* Expectativa line */}
+      <path d={linePath('esperado')} fill="none" stroke="#bfdbfe" strokeWidth="1"
+        strokeDasharray="3,3" strokeLinejoin="round" />
 
-      {/* Recebido line (solid) */}
-      <path d={linePath('recebido')} fill="none" stroke="#34d399" strokeWidth="1.8"
+      {/* Recebido line */}
+      <path d={linePath('recebido')} fill="none" stroke="#6ee7b7" strokeWidth="1.5"
         strokeLinejoin="round" />
 
-      {/* Dots + data labels + X labels */}
       {dados.map((d, i) => {
         const isCurrent = i === li;
-        const labelY = Math.max(PT - 4, yOf(d.recebido) - 7);
+        const labelY = Math.max(PT - 3, yOf(d.recebido) - 5);
         return (
           <g key={i}>
-            <circle cx={xOf(i)} cy={yOf(d.esperado)} r="2"
-              fill="white" stroke="#93c5fd" strokeWidth="1" />
-            <circle cx={xOf(i)} cy={yOf(d.recebido)} r={isCurrent ? 3.5 : 2.5}
+            <circle cx={xOf(i)} cy={yOf(d.esperado)} r="1.5"
+              fill="white" stroke="#93c5fd" strokeWidth="0.8" />
+            <circle cx={xOf(i)} cy={yOf(d.recebido)} r={isCurrent ? 3 : 2}
               fill={isCurrent ? '#10b981' : '#34d399'}
-              stroke="white" strokeWidth={isCurrent ? 1.5 : 1} />
+              stroke="white" strokeWidth="1" />
             {d.recebido > 0 && (
-              <text x={xOf(i)} y={labelY} textAnchor="middle" fontSize="11"
-                fill={isCurrent ? '#10b981' : '#94a3b8'} fontWeight={isCurrent ? 600 : 400}>
+              <text x={xOf(i)} y={labelY} textAnchor="middle" fontSize="6"
+                fill={isCurrent ? '#059669' : '#9ca3af'} fontWeight={isCurrent ? 700 : 400}>
                 {fmtLabel(d.recebido)}
               </text>
             )}
-            <text x={xOf(i)} y={H - 5} textAnchor="middle" fontSize="12"
-              fill={isCurrent ? '#10b981' : '#94a3b8'} fontWeight={isCurrent ? 600 : 400}>
+            <text x={xOf(i)} y={H - 3} textAnchor="middle" fontSize="7"
+              fill={isCurrent ? '#059669' : '#9ca3af'} fontWeight={isCurrent ? 700 : 400}>
               {d.label}
             </text>
           </g>
         );
       })}
 
-      {/* Legend — top right */}
-      <g transform={`translate(${W - PR - 158}, 8)`}>
-        <line x1="0" y1="4" x2="12" y2="4" stroke="#34d399" strokeWidth="1.8" />
-        <text x="16" y="8" fontSize="10" fill="#94a3b8">Recebido</text>
-        <line x1="76" y1="4" x2="88" y2="4" stroke="#93c5fd" strokeWidth="1.2" strokeDasharray="3,2" />
-        <text x="92" y="8" fontSize="10" fill="#94a3b8">Expectativa</text>
+      {/* Legend — top right, tiny */}
+      <g transform={`translate(${W - PR - 100}, 5)`}>
+        <line x1="0" y1="3.5" x2="9" y2="3.5" stroke="#6ee7b7" strokeWidth="1.5" />
+        <text x="12" y="6.5" fontSize="5.5" fill="#9ca3af">Recebido</text>
+        <line x1="56" y1="3.5" x2="65" y2="3.5" stroke="#bfdbfe" strokeWidth="1" strokeDasharray="2,2" />
+        <text x="68" y="6.5" fontSize="5.5" fill="#9ca3af">Expectativa</text>
       </g>
     </svg>
   );
@@ -238,24 +237,28 @@ export default function DashboardModule() {
     <section className="content-area active">
 
       {/* Topo: gráfico + cards de contagem */}
-      <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', alignItems: 'stretch' }}>
-        <div className="table-container" style={{ flex: 1, padding: '14px 20px 10px' }}>
-          <div style={{ marginBottom: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Recebimentos · 6 meses</span>
+      <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'stretch' }}>
+        <div className="table-container" style={{ flex: 1, padding: '10px 14px 6px', minWidth: 0 }}>
+          <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '4px' }}>
+            Recebimentos · 6 meses
           </div>
           <LineChart dados={historicoMeses} />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '148px', flexShrink: 0 }}>
-          <div className="metric-card" style={{ flex: 1, margin: 0, padding: '12px 16px' }}>
-            <h3 style={{ fontSize: '11px', marginBottom: '4px' }}>Clientes Ativos</h3>
-            <div className="value" style={{ fontSize: '26px', lineHeight: 1.1 }}>{metrics.clientesAtivos}</div>
-            <span className="trend neutral" style={{ fontSize: '10px' }}>Base total</span>
-          </div>
-          <div className="metric-card" style={{ flex: 1, margin: 0, padding: '12px 16px' }}>
-            <h3 style={{ fontSize: '11px', marginBottom: '4px' }}>Contratos Ativos</h3>
-            <div className="value" style={{ fontSize: '26px', lineHeight: 1.1 }}>{metrics.contratosAtivos}</div>
-            <span className="trend neutral" style={{ fontSize: '10px' }}>Em andamento</span>
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '120px', flexShrink: 0 }}>
+          {[
+            { label: 'Clientes Ativos', value: metrics.clientesAtivos, sub: 'ativos' },
+            { label: 'Contratos Ativos', value: metrics.contratosAtivos, sub: 'em andamento' },
+          ].map(({ label, value, sub }) => (
+            <div key={label} style={{
+              flex: 1, border: '1px solid var(--border)', borderRadius: '8px',
+              padding: '10px 12px', display: 'flex', flexDirection: 'column', justifyContent: 'center',
+              background: '#fff',
+            }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px', fontWeight: 500 }}>{label}</div>
+              <div style={{ fontSize: '22px', fontWeight: 700, color: 'var(--secondary)', lineHeight: 1.1 }}>{value}</div>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{sub}</div>
+            </div>
+          ))}
         </div>
       </div>
 
