@@ -143,7 +143,7 @@ export default function DashboardModule() {
         supabase.from('parcelas').select('valor, data_pagamento')
           .eq('status', 'Paga').gte('data_pagamento', histStart).lte('data_pagamento', ultimoDiaMes),
         supabase.from('parcelas').select('id, valor, data_vencimento, contratos(titulo, clientes(nome, apelido))')
-          .lt('data_vencimento', hojeStr).neq('status', 'Paga').order('data_vencimento', { ascending: true }).limit(5),
+          .lt('data_vencimento', hojeStr).neq('status', 'Paga').neq('status', 'Congelada').order('data_vencimento', { ascending: true }).limit(5),
         supabase.from('profiles').select('id, nome'),
         supabase.from('contratos').select('id, titulo, prospeccao_valor, prospeccao_data, prospeccao_usuario_id, prospeccao_obs, clientes(nome, apelido)')
           .eq('tem_prospeccao', true).eq('prospeccao_status', 'Pendente').order('prospeccao_data', { ascending: true }).limit(5),
@@ -154,7 +154,7 @@ export default function DashboardModule() {
       // KPI mês atual: recebido por data_pagamento, a receber por data_vencimento
       const mesPrefixAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
       const recebido  = (parcelasHistPagas || []).filter(p => p.data_pagamento?.startsWith(mesPrefixAtual)).reduce((s, p) => s + Number(p.valor), 0);
-      const aReceber  = (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(mesPrefixAtual) && p.status !== 'Paga').reduce((s, p) => s + Number(p.valor), 0);
+      const aReceber  = (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(mesPrefixAtual) && p.status !== 'Paga' && p.status !== 'Congelada').reduce((s, p) => s + Number(p.valor), 0);
 
       // Build 6-month history
       const mesesData = Array.from({ length: 6 }, (_, idx) => {
@@ -165,7 +165,7 @@ export default function DashboardModule() {
         // projetado = pagas no mês (por data_pagamento) + pendentes no mês (por data_vencimento)
         // igual ao Parcelas module que usa data_pagamento para pagas e data_vencimento para não-pagas
         const recMes = (parcelasHistPagas || []).filter(p => p.data_pagamento?.startsWith(prefix)).reduce((s, p) => s + Number(p.valor), 0);
-        const pendMes = (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(prefix) && p.status !== 'Paga').reduce((s, p) => s + Number(p.valor), 0);
+        const pendMes = (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(prefix) && p.status !== 'Paga' && p.status !== 'Congelada').reduce((s, p) => s + Number(p.valor), 0);
         return {
           label,
           recebido: recMes,
