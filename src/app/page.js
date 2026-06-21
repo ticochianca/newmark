@@ -20,6 +20,16 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const router = useRouter();
 
+  const [reembolsosBadge, setReembolsosBadge] = useState(0);
+
+  const fetchReembolsosBadge = async () => {
+    const [{ count: c1 }, { count: c2 }] = await Promise.all([
+      supabase.from('reembolsos').select('*', { count: 'exact', head: true }).eq('status', 'Pendente'),
+      supabase.from('contratos').select('*', { count: 'exact', head: true }).eq('tem_prospeccao', true).eq('prospeccao_status', 'Pendente'),
+    ]);
+    setReembolsosBadge((c1 || 0) + (c2 || 0));
+  };
+
   // Minha Conta modal
   const [contaModal, setContaModal] = useState(false);
   const [contaTab, setContaTab] = useState('senha'); // 'senha' | 'email'
@@ -67,6 +77,7 @@ export default function Home() {
         const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
         setCurrentProfile(profile);
         setLoading(false);
+        fetchReembolsosBadge();
       }
     });
 
@@ -112,7 +123,18 @@ export default function Home() {
           {canSee('emissoes')   && <div className={`nav-item ${activeTab === 'emissoes'   ? 'active' : ''}`} onClick={() => setActiveTab('emissoes')}>Emissões</div>}
           {canSee('agenda')     && <div className={`nav-item ${activeTab === 'agenda'     ? 'active' : ''}`} onClick={() => setActiveTab('agenda')}>Agenda</div>}
           {canSee('usuarios')   && <div className={`nav-item ${activeTab === 'usuarios'   ? 'active' : ''}`} onClick={() => setActiveTab('usuarios')}>Usuários</div>}
-          {canSee('reembolsos') && <div className={`nav-item ${activeTab === 'reembolsos' ? 'active' : ''}`} onClick={() => setActiveTab('reembolsos')}>Reembolsos</div>}
+          {canSee('reembolsos') && (
+            <div className={`nav-item ${activeTab === 'reembolsos' ? 'active' : ''}`}
+              onClick={() => { setActiveTab('reembolsos'); fetchReembolsosBadge(); }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              Reembolsos
+              {reembolsosBadge > 0 && (
+                <span style={{ background: '#ef4444', color: '#fff', borderRadius: '50%', fontSize: '10px', fontWeight: 700, minWidth: '17px', height: '17px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>
+                  {reembolsosBadge}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="user-profile" style={{ cursor: 'pointer' }} onClick={openContaModal} title="Minha Conta">

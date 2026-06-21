@@ -16,6 +16,7 @@ function KPI({ label, value, color }) {
 }
 
 function LineChart({ dados }) {
+  const [hoveredIdx, setHoveredIdx] = useState(null);
   if (!dados || dados.length === 0) return null;
 
   // Chart renders full-width (~1100px). viewBox is 600, so scale ≈ 1.83.
@@ -73,11 +74,17 @@ function LineChart({ dados }) {
         const cur = i === li;
         const lx = xOf(i);
         const ly = yOf(d.recebido);
+        const ey = yOf(d.esperado);
         const anchor = i === li ? 'end' : i === 0 ? 'start' : 'middle';
         const lxOff = i === li ? lx - 2 : i === 0 ? lx + 2 : lx;
         return (
           <g key={i}>
-            <circle cx={lx} cy={yOf(d.esperado)} r="1.1" fill="white" stroke="#93c5fd" strokeWidth="0.6" />
+            <circle cx={lx} cy={ey} r="1.1" fill="white" stroke="#93c5fd" strokeWidth="0.6" />
+            {/* invisible hit area for projetado tooltip */}
+            <circle cx={lx} cy={ey} r="7" fill="transparent"
+              onMouseEnter={() => setHoveredIdx(i)}
+              onMouseLeave={() => setHoveredIdx(null)}
+              style={{ cursor: 'default' }} />
             <circle cx={lx} cy={ly}
               r={cur ? 2.8 : 1.6}
               fill={cur ? '#10b981' : '#fff'}
@@ -95,6 +102,27 @@ function LineChart({ dados }) {
           </g>
         );
       })}
+
+      {/* Projetado tooltip */}
+      {hoveredIdx !== null && (() => {
+        const d = dados[hoveredIdx];
+        const tx = xOf(hoveredIdx);
+        const ty = yOf(d.esperado);
+        const label = `R$ ${d.esperado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+        const tw = label.length * 3.3 + 10;
+        const tx2 = hoveredIdx === li ? tx - tw : hoveredIdx === 0 ? tx : tx - tw / 2;
+        return (
+          <g style={{ pointerEvents: 'none' }}>
+            <rect x={tx2} y={ty - 13} width={tw} height="11" rx="2"
+              fill="white" stroke="#e2e8f0" strokeWidth="0.6"
+              style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.08))' }} />
+            <text x={tx2 + tw / 2} y={ty - 5} textAnchor="middle"
+              fontSize="5.5" fill="#374151" fontWeight="500">
+              {label}
+            </text>
+          </g>
+        );
+      })()}
 
       <g transform={`translate(${W-PR-78},6)`}>
         <line x1="0" y1="3" x2="8" y2="3" stroke="#10b981" strokeWidth="1.5" />
