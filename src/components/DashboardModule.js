@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 function LineChart({ dados }) {
   if (!dados || dados.length === 0) return null;
 
-  const W = 600, H = 130, PL = 56, PR = 16, PT = 16, PB = 28;
+  const W = 600, H = 160, PL = 58, PR = 16, PT = 34, PB = 28;
   const cW = W - PL - PR;
   const cH = H - PT - PB;
 
@@ -20,6 +20,9 @@ function LineChart({ dados }) {
     dados.map((d, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(d[key]).toFixed(1)}`).join(' ');
 
   const fmtY = (v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${v}`;
+  const fmtLabel = (v) => v > 0
+    ? (v / 1000).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' K'
+    : '';
   const yTicks = [0, niceMax * 0.5, niceMax];
   const li = dados.length - 1;
 
@@ -29,7 +32,7 @@ function LineChart({ dados }) {
       {yTicks.map((v, i) => (
         <g key={i}>
           <line x1={PL} y1={yOf(v)} x2={W - PR} y2={yOf(v)} stroke="#f1f5f9" strokeWidth="1" />
-          <text x={PL - 5} y={yOf(v) + 3.5} textAnchor="end" fontSize="9" fill="#cbd5e1">{fmtY(v)}</text>
+          <text x={PL - 6} y={yOf(v) + 4} textAnchor="end" fontSize="11" fill="#cbd5e1">{fmtY(v)}</text>
         </g>
       ))}
 
@@ -41,9 +44,10 @@ function LineChart({ dados }) {
       <path d={linePath('recebido')} fill="none" stroke="#34d399" strokeWidth="1.8"
         strokeLinejoin="round" />
 
-      {/* Dots + X labels */}
+      {/* Dots + data labels + X labels */}
       {dados.map((d, i) => {
         const isCurrent = i === li;
+        const labelY = Math.max(PT - 4, yOf(d.recebido) - 7);
         return (
           <g key={i}>
             <circle cx={xOf(i)} cy={yOf(d.esperado)} r="2"
@@ -51,12 +55,14 @@ function LineChart({ dados }) {
             <circle cx={xOf(i)} cy={yOf(d.recebido)} r={isCurrent ? 3.5 : 2.5}
               fill={isCurrent ? '#10b981' : '#34d399'}
               stroke="white" strokeWidth={isCurrent ? 1.5 : 1} />
-            <text
-              x={xOf(i)} y={H - 4}
-              textAnchor="middle" fontSize="9.5"
-              fill={isCurrent ? '#10b981' : '#94a3b8'}
-              fontWeight={isCurrent ? 600 : 400}
-            >
+            {d.recebido > 0 && (
+              <text x={xOf(i)} y={labelY} textAnchor="middle" fontSize="11"
+                fill={isCurrent ? '#10b981' : '#94a3b8'} fontWeight={isCurrent ? 600 : 400}>
+                {fmtLabel(d.recebido)}
+              </text>
+            )}
+            <text x={xOf(i)} y={H - 5} textAnchor="middle" fontSize="12"
+              fill={isCurrent ? '#10b981' : '#94a3b8'} fontWeight={isCurrent ? 600 : 400}>
               {d.label}
             </text>
           </g>
@@ -64,11 +70,11 @@ function LineChart({ dados }) {
       })}
 
       {/* Legend — top right */}
-      <g transform={`translate(${W - PR - 160}, 6)`}>
+      <g transform={`translate(${W - PR - 158}, 8)`}>
         <line x1="0" y1="4" x2="12" y2="4" stroke="#34d399" strokeWidth="1.8" />
-        <text x="16" y="7.5" fontSize="9" fill="#94a3b8">Recebido</text>
-        <line x1="72" y1="4" x2="84" y2="4" stroke="#93c5fd" strokeWidth="1.2" strokeDasharray="3,2" />
-        <text x="88" y="7.5" fontSize="9" fill="#94a3b8">Expectativa</text>
+        <text x="16" y="8" fontSize="10" fill="#94a3b8">Recebido</text>
+        <line x1="76" y1="4" x2="88" y2="4" stroke="#93c5fd" strokeWidth="1.2" strokeDasharray="3,2" />
+        <text x="92" y="8" fontSize="10" fill="#94a3b8">Expectativa</text>
       </g>
     </svg>
   );
@@ -239,16 +245,16 @@ export default function DashboardModule() {
           </div>
           <LineChart dados={historicoMeses} />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '180px', flexShrink: 0 }}>
-          <div className="metric-card" style={{ flex: 1, margin: 0 }}>
-            <h3>Clientes Ativos</h3>
-            <div className="value">{metrics.clientesAtivos}</div>
-            <span className="trend neutral">Base total</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '148px', flexShrink: 0 }}>
+          <div className="metric-card" style={{ flex: 1, margin: 0, padding: '12px 16px' }}>
+            <h3 style={{ fontSize: '11px', marginBottom: '4px' }}>Clientes Ativos</h3>
+            <div className="value" style={{ fontSize: '26px', lineHeight: 1.1 }}>{metrics.clientesAtivos}</div>
+            <span className="trend neutral" style={{ fontSize: '10px' }}>Base total</span>
           </div>
-          <div className="metric-card" style={{ flex: 1, margin: 0 }}>
-            <h3>Contratos Ativos</h3>
-            <div className="value">{metrics.contratosAtivos}</div>
-            <span className="trend neutral">Em andamento</span>
+          <div className="metric-card" style={{ flex: 1, margin: 0, padding: '12px 16px' }}>
+            <h3 style={{ fontSize: '11px', marginBottom: '4px' }}>Contratos Ativos</h3>
+            <div className="value" style={{ fontSize: '26px', lineHeight: 1.1 }}>{metrics.contratosAtivos}</div>
+            <span className="trend neutral" style={{ fontSize: '10px' }}>Em andamento</span>
           </div>
         </div>
       </div>
