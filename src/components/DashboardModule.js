@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 function LineChart({ dados }) {
   if (!dados || dados.length === 0) return null;
 
-  const W = 600, H = 87, PL = 56, PR = 16, PT = 12, PB = 24;
+  const W = 600, H = 130, PL = 56, PR = 16, PT = 16, PB = 28;
   const cW = W - PL - PR;
   const cH = H - PT - PB;
 
@@ -231,25 +231,29 @@ export default function DashboardModule() {
   return (
     <section className="content-area active">
 
-      {/* Gráfico de Recebimentos */}
-      <div className="table-container" style={{ marginBottom: '20px', padding: '14px 20px 10px', width: '50%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-          <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Recebimentos · 6 meses</span>
+      {/* Topo: gráfico + cards de contagem */}
+      <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', alignItems: 'stretch' }}>
+        <div className="table-container" style={{ flex: 1, padding: '14px 20px 10px' }}>
+          <div style={{ marginBottom: '6px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Recebimentos · 6 meses</span>
+          </div>
+          <LineChart dados={historicoMeses} />
         </div>
-        <LineChart dados={historicoMeses} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '180px', flexShrink: 0 }}>
+          <div className="metric-card" style={{ flex: 1, margin: 0 }}>
+            <h3>Clientes Ativos</h3>
+            <div className="value">{metrics.clientesAtivos}</div>
+            <span className="trend neutral">Base total</span>
+          </div>
+          <div className="metric-card" style={{ flex: 1, margin: 0 }}>
+            <h3>Contratos Ativos</h3>
+            <div className="value">{metrics.contratosAtivos}</div>
+            <span className="trend neutral">Em andamento</span>
+          </div>
+        </div>
       </div>
 
-      <div className="metrics-grid">
-        <div className="metric-card">
-          <h3>Clientes Ativos</h3>
-          <div className="value">{metrics.clientesAtivos}</div>
-          <span className="trend neutral">Base total</span>
-        </div>
-        <div className="metric-card">
-          <h3>Contratos Ativos</h3>
-          <div className="value">{metrics.contratosAtivos}</div>
-          <span className="trend neutral">Em andamento</span>
-        </div>
+      <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
         <div className="metric-card">
           <h3>Recebido (Mês Atual)</h3>
           <div className="value" style={{color: 'var(--success)'}}>R$ {metrics.recebidoMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
