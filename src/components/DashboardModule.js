@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 function LineChart({ dados }) {
   if (!dados || dados.length === 0) return null;
 
-  const W = 600, H = 130, PL = 56, PR = 16, PT = 16, PB = 28;
+  const W = 600, H = 87, PL = 56, PR = 16, PT = 12, PB = 24;
   const cW = W - PL - PR;
   const cH = H - PT - PB;
 
@@ -232,7 +232,7 @@ export default function DashboardModule() {
     <section className="content-area active">
 
       {/* Gráfico de Recebimentos */}
-      <div className="table-container" style={{ marginBottom: '20px', padding: '14px 20px 10px' }}>
+      <div className="table-container" style={{ marginBottom: '20px', padding: '14px 20px 10px', width: '50%' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
           <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>Recebimentos · 6 meses</span>
         </div>
