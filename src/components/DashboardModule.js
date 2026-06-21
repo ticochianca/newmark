@@ -71,19 +71,24 @@ function LineChart({ dados }) {
 
       {dados.map((d, i) => {
         const cur = i === li;
+        const lx = xOf(i);
+        const ly = yOf(d.recebido);
+        const anchor = i === li ? 'end' : i === 0 ? 'start' : 'middle';
+        const lxOff = i === li ? lx - 2 : i === 0 ? lx + 2 : lx;
         return (
           <g key={i}>
-            <circle cx={xOf(i)} cy={yOf(d.esperado)} r="1.1" fill="white" stroke="#93c5fd" strokeWidth="0.6" />
-            <circle cx={xOf(i)} cy={yOf(d.recebido)}
+            <circle cx={lx} cy={yOf(d.esperado)} r="1.1" fill="white" stroke="#93c5fd" strokeWidth="0.6" />
+            <circle cx={lx} cy={ly}
               r={cur ? 2.8 : 1.6}
               fill={cur ? '#10b981' : '#fff'}
               stroke="#10b981" strokeWidth={cur ? 0 : 1.1} />
-            {cur && d.recebido > 0 && (
-              <text x={xOf(i)+3} y={yOf(d.recebido)-3} fontSize="5.5" fill="#059669" fontWeight="700">
+            {d.recebido > 0 && (
+              <text x={lxOff} y={ly - 4} textAnchor={anchor} fontSize="5.5"
+                fill={cur ? '#059669' : '#9ca3af'} fontWeight="400">
                 {fmtK(d.recebido)}
               </text>
             )}
-            <text x={xOf(i)} y={H-2} textAnchor="middle" fontSize="6"
+            <text x={lx} y={H-2} textAnchor="middle" fontSize="6"
               fill={cur ? '#059669' : '#9ca3af'} fontWeight={cur ? 700 : 400}>
               {d.label}
             </text>
@@ -91,11 +96,11 @@ function LineChart({ dados }) {
         );
       })}
 
-      <g transform={`translate(${W-PR-82},6)`}>
+      <g transform={`translate(${W-PR-78},6)`}>
         <line x1="0" y1="3" x2="8" y2="3" stroke="#10b981" strokeWidth="1.5" />
         <text x="11" y="6" fontSize="5" fill="#9ca3af">Recebido</text>
-        <line x1="46" y1="3" x2="54" y2="3" stroke="#bfdbfe" strokeWidth="0.8" strokeDasharray="2,2" />
-        <text x="57" y="6" fontSize="5" fill="#9ca3af">Expectativa</text>
+        <line x1="42" y1="3" x2="50" y2="3" stroke="#bfdbfe" strokeWidth="0.8" strokeDasharray="2,2" />
+        <text x="53" y="6" fontSize="5" fill="#9ca3af">Projetado</text>
       </g>
     </svg>
   );
@@ -117,11 +122,13 @@ export default function DashboardModule() {
       const ultimoDiaMes   = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).toISOString().split('T')[0];
       const hojeStr        = hoje.toISOString().split('T')[0];
 
+      const histStart = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1).toISOString().split('T')[0];
+
       const [
         { count: cliCount },
         { count: contCount },
-        { data: parcelasMes },
         { data: parcelasHist },
+        { data: parcelasHistPagas },
         { data: atrasadas },
         { data: profilesData },
         { data: prospec },
@@ -129,10 +136,12 @@ export default function DashboardModule() {
       ] = await Promise.all([
         supabase.from('clientes').select('*', { count: 'exact', head: true }).eq('status', 'Ativo'),
         supabase.from('contratos').select('*', { count: 'exact', head: true }).eq('status', 'Em andamento'),
-        supabase.from('parcelas').select('valor, status').gte('data_vencimento', primeiroDiaMes).lte('data_vencimento', ultimoDiaMes),
+        // projetado: agrupa por data_vencimento
         supabase.from('parcelas').select('valor, status, data_vencimento')
-          .gte('data_vencimento', new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1).toISOString().split('T')[0])
-          .lte('data_vencimento', ultimoDiaMes),
+          .gte('data_vencimento', histStart).lte('data_vencimento', ultimoDiaMes),
+        // recebido: agrupa por data_pagamento (igual ao módulo de Parcelas)
+        supabase.from('parcelas').select('valor, data_pagamento')
+          .eq('status', 'Paga').gte('data_pagamento', histStart).lte('data_pagamento', ultimoDiaMes),
         supabase.from('parcelas').select('id, valor, data_vencimento, contratos(titulo, clientes(nome, apelido))')
           .lt('data_vencimento', hojeStr).neq('status', 'Paga').order('data_vencimento', { ascending: true }).limit(5),
         supabase.from('profiles').select('id, nome'),
@@ -142,8 +151,10 @@ export default function DashboardModule() {
           .eq('tipo_cobranca', 'partido_fixo').eq('status', 'Em andamento'),
       ]);
 
-      let recebido = 0, aReceber = 0;
-      (parcelasMes || []).forEach(p => p.status === 'Paga' ? (recebido += p.valor) : (aReceber += p.valor));
+      // KPI mês atual: recebido por data_pagamento, a receber por data_vencimento
+      const mesPrefixAtual = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
+      const recebido  = (parcelasHistPagas || []).filter(p => p.data_pagamento?.startsWith(mesPrefixAtual)).reduce((s, p) => s + Number(p.valor), 0);
+      const aReceber  = (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(mesPrefixAtual) && p.status !== 'Paga').reduce((s, p) => s + Number(p.valor), 0);
 
       // Build 6-month history
       const mesesData = Array.from({ length: 6 }, (_, idx) => {
@@ -151,11 +162,10 @@ export default function DashboardModule() {
         const prefix = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
         const raw = d.toLocaleString('pt-BR', { month: 'short' }).replace('.', '');
         const label = raw.charAt(0).toUpperCase() + raw.slice(1);
-        const parcMes = (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(prefix));
         return {
           label,
-          recebido: parcMes.filter(p => p.status === 'Paga').reduce((s, p) => s + Number(p.valor), 0),
-          esperado: parcMes.reduce((s, p) => s + Number(p.valor), 0),
+          recebido: (parcelasHistPagas || []).filter(p => p.data_pagamento?.startsWith(prefix)).reduce((s, p) => s + Number(p.valor), 0),
+          esperado: (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(prefix)).reduce((s, p) => s + Number(p.valor), 0),
         };
       });
 
