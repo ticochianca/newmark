@@ -162,10 +162,14 @@ export default function DashboardModule() {
         const prefix = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
         const raw = d.toLocaleString('pt-BR', { month: 'short' }).replace('.', '');
         const label = raw.charAt(0).toUpperCase() + raw.slice(1);
+        // projetado = pagas no mês (por data_pagamento) + pendentes no mês (por data_vencimento)
+        // igual ao Parcelas module que usa data_pagamento para pagas e data_vencimento para não-pagas
+        const recMes = (parcelasHistPagas || []).filter(p => p.data_pagamento?.startsWith(prefix)).reduce((s, p) => s + Number(p.valor), 0);
+        const pendMes = (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(prefix) && p.status !== 'Paga').reduce((s, p) => s + Number(p.valor), 0);
         return {
           label,
-          recebido: (parcelasHistPagas || []).filter(p => p.data_pagamento?.startsWith(prefix)).reduce((s, p) => s + Number(p.valor), 0),
-          esperado: (parcelasHist || []).filter(p => p.data_vencimento?.startsWith(prefix)).reduce((s, p) => s + Number(p.valor), 0),
+          recebido: recMes,
+          esperado: recMes + pendMes,
         };
       });
 
