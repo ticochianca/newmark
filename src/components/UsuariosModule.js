@@ -12,6 +12,7 @@ const MODULOS_PERM = [
   { key: 'emissoes',   label: 'Emissões',   niveis: ['sem_acesso', 'ver_proprio', 'ver_tudo', 'alterar'] },
   { key: 'agenda',     label: 'Agenda',     niveis: ['sem_acesso', 'ver_proprio', 'ver_tudo', 'alterar'] },
   { key: 'reembolsos', label: 'Reembolsos', niveis: ['sem_acesso', 'ver_proprio', 'ver_tudo', 'alterar'] },
+  { key: 'site',       label: 'Site',       niveis: ['sem_acesso', 'ver_tudo', 'alterar'] },
   { key: 'usuarios',   label: 'Usuários',   niveis: ['sem_acesso', 'alterar'] },
 ];
 

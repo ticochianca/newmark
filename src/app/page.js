@@ -12,6 +12,7 @@ import UsuariosModule from '@/components/UsuariosModule';
 import EmissoesModule from '@/components/EmissoesModule';
 import AgendaModule from '@/components/AgendaModule';
 import ReembolsosModule from '@/components/ReembolsosModule';
+import SiteModule from '@/components/SiteModule';
 
 export default function Home() {
   const [session, setSession] = useState(null);
@@ -28,6 +29,13 @@ export default function Home() {
       supabase.from('contratos').select('*', { count: 'exact', head: true }).eq('tem_prospeccao', true).eq('prospeccao_status', 'Pendente'),
     ]);
     setReembolsosBadge((c1 || 0) + (c2 || 0));
+  };
+
+  const [siteContatosBadge, setSiteContatosBadge] = useState(0);
+
+  const fetchSiteContatosBadge = async () => {
+    const { count } = await supabase.from('site_contatos').select('*', { count: 'exact', head: true }).eq('lida', false);
+    setSiteContatosBadge(count || 0);
   };
 
   // Minha Conta modal
@@ -78,6 +86,7 @@ export default function Home() {
         setCurrentProfile(profile);
         setLoading(false);
         fetchReembolsosBadge();
+        fetchSiteContatosBadge();
       }
     });
 
@@ -92,6 +101,10 @@ export default function Home() {
 
     return () => subscription.unsubscribe();
   }, [router]);
+
+  useEffect(() => {
+    if (activeTab !== 'site') fetchSiteContatosBadge();
+  }, [activeTab]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -122,6 +135,16 @@ export default function Home() {
           {canSee('alocacoes')  && <div className={`nav-item ${activeTab === 'alocacoes'  ? 'active' : ''}`} onClick={() => setActiveTab('alocacoes')}>Alocações</div>}
           {canSee('emissoes')   && <div className={`nav-item ${activeTab === 'emissoes'   ? 'active' : ''}`} onClick={() => setActiveTab('emissoes')}>Emissões</div>}
           {canSee('agenda')     && <div className={`nav-item ${activeTab === 'agenda'     ? 'active' : ''}`} onClick={() => setActiveTab('agenda')}>Agenda</div>}
+          {canSee('site')       && (
+            <div className={`nav-item ${activeTab === 'site' ? 'active' : ''}`}
+              onClick={() => setActiveTab('site')}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              Site
+              {siteContatosBadge > 0 && (
+                <span style={{ width: '9px', height: '9px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'inline-block' }} />
+              )}
+            </div>
+          )}
           {canSee('usuarios')   && <div className={`nav-item ${activeTab === 'usuarios'   ? 'active' : ''}`} onClick={() => setActiveTab('usuarios')}>Usuários</div>}
           {canSee('reembolsos') && (
             <div className={`nav-item ${activeTab === 'reembolsos' ? 'active' : ''}`}
@@ -183,6 +206,7 @@ export default function Home() {
         {activeTab === 'alocacoes'  && <AlocacoesModule  permissao={perm('alocacoes')}  userId={currentProfile?.id} />}
         {activeTab === 'emissoes'   && <EmissoesModule   permissao={perm('emissoes')}   userId={currentProfile?.id} />}
         {activeTab === 'agenda'     && <AgendaModule     permissao={perm('agenda')}     userId={currentProfile?.id} />}
+        {activeTab === 'site'       && <SiteModule       permissao={perm('site')} />}
         {activeTab === 'usuarios'   && <UsuariosModule   />}
         {activeTab === 'reembolsos' && <ReembolsosModule permissao={perm('reembolsos')} userId={currentProfile?.id} />}
       </main>
