@@ -484,12 +484,27 @@ export default function ParcelasModule() {
           </button>
         </div>
 
-        <button 
+        <button
           className={`btn ${mostrarAlocacao ? 'btn-primary' : 'btn-secondary'}`}
           style={{ fontSize: '14px', padding: '6px 12px' }}
           onClick={() => setMostrarAlocacao(!mostrarAlocacao)}
         >
           {mostrarAlocacao ? 'Omitir Alocação' : 'Mostrar Alocação'}
+        </button>
+
+        <button
+          className="btn btn-secondary"
+          style={{ fontSize: '14px', padding: '6px 12px' }}
+          onClick={() => {
+            const params = new URLSearchParams();
+            if (dataInicio) params.set('de', dataInicio);
+            if (dataFim) params.set('ate', dataFim);
+            if (filtroCliente) params.set('cliente', filtroCliente);
+            if (mostrarAlocacao) params.set('alocacao', '1');
+            window.open(`/relatorio/parcelas?${params.toString()}`, '_blank');
+          }}
+        >
+          🖨 Imprimir
         </button>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto' }}>
           <input 
