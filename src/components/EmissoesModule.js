@@ -440,7 +440,24 @@ export default function EmissoesModule() {
     setBulkTodasParcelas(todasParcelas || []);
     const resultados = [];
     for (const file of Array.from(files)) {
-      const parsed = await parseFile(file, bulkType);
+      let parsed;
+      try {
+        parsed = await parseFile(file, bulkType);
+      } catch (e) {
+        resultados.push({
+          file,
+          filename: file.name,
+          parsed: {},
+          clienteMatch: null,
+          parcelasDoCliente: [],
+          parcelaSelecionada: null,
+          status: 'erro',
+          salvo: false,
+          erro: 'Falha ao ler o arquivo (tente novamente)',
+          conferencias: [],
+        });
+        continue;
+      }
       const cnpjDigits = (parsed.cnpj || '').replace(/\D/g, '');
 
       let parcelasDoCliente = [];
@@ -511,9 +528,10 @@ export default function EmissoesModule() {
 
     // Pós-processamento para adicionar conferências
     const resultadosComConferencias = resultados.map(r => {
+      if (r.status === 'erro') return r;
       const { conferencias, status } = runConferencias(r.parsed, r.parcelaSelecionada, bulkType);
-      return { 
-        ...r, 
+      return {
+        ...r,
         conferencias,
         status: (r.status === 'nao_encontrado') ? 'nao_encontrado' : status 
       };
