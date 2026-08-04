@@ -49,10 +49,11 @@ function extractNFNumero(lines) {
 }
 
 function extractNFCliente(lines) {
-  // Find TOMADOR section — may appear as "TOMADORDOSERVIÇO" (spaces stripped)
+  // Find TOMADOR section — may appear as "TOMADORDOSERVIÇO" (municipal NFS-e,
+  // spaces stripped) or "TOMADOR/ADQUIRENTE" (NFS-e Nacional / DANFSe v2.0)
   let tomadorIdx = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (/TOMADOR\s*DO\s*SERVI[ÇC]O/i.test(lines[i].trim())) {
+    if (/TOMADOR\s*(?:DO\s*SERVI[ÇC]O|[\/\\]\s*ADQUIRENTE)/i.test(lines[i].trim())) {
       tomadorIdx = i;
       break;
     }
@@ -126,8 +127,9 @@ function extractNFValor(lines) {
     return null;
   };
 
-  // "ValordoServiço" or "Valor do Serviço"
-  const res = nextLineAfter(lines, /valor\s*do\s*servi[çc]o/i)
+  // "ValordoServiço" (municipal) or "ValordaOperação/Serviço" (NFS-e Nacional / DANFSe)
+  const res = nextLineAfter(lines, /valor\s*da\s*opera[çc][aã]o(?:\s*\/\s*servi[çc]o)?/i)
+    || nextLineAfter(lines, /valor\s*do\s*servi[çc]o/i)
     || nextLineAfter(lines, /valor\s*total\s*dos\s*servi[çc]os?/i)
     || nextLineAfter(lines, /valor\s*total/i);
 
@@ -138,7 +140,7 @@ function extractNFValor(lines) {
 
   // Inline fallback
   for (const line of lines) {
-    if (/valor\s*do\s*servi[çc]o/i.test(line)) {
+    if (/valor\s*da\s*opera[çc][aã]o/i.test(line) || /valor\s*do\s*servi[çc]o/i.test(line)) {
       const parsed = parseMonetary(line);
       if (parsed) return parsed;
     }
@@ -212,7 +214,7 @@ function extractBoletoValor(lines) {
 function extractNFTomador(lines) {
   let tomadorIdx = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (/TOMADOR\s*DO\s*SERVI[ÇC]O/i.test(lines[i].trim())) { tomadorIdx = i; break; }
+    if (/TOMADOR\s*(?:DO\s*SERVI[ÇC]O|[\/\\]\s*ADQUIRENTE)/i.test(lines[i].trim())) { tomadorIdx = i; break; }
   }
   if (tomadorIdx < 0) return {};
 
@@ -263,8 +265,8 @@ function extractNFTomador(lines) {
     }
   }
 
-  // CNPJ do tomador (label "CPF/CNPJ" dentro da seção TOMADOR)
-  const cnpjRes = nextLineAfter(lines, /^CPF\s*[\/\\]?\s*CNPJ$/i, tomadorIdx);
+  // CNPJ do tomador — label "CPF/CNPJ" (municipal) ou "CNPJ/CPF/NIF" (NFS-e Nacional)
+  const cnpjRes = nextLineAfter(lines, /^(?:CPF|CNPJ)\s*[\/\\]?\s*(?:CPF|CNPJ)(?:\s*[\/\\]?\s*NIF)?$/i, tomadorIdx);
   if (cnpjRes?.value) {
     const digits = cnpjRes.value.replace(/\D/g, '');
     if (digits.length === 14 || digits.length === 11) result.cnpj = digits;
