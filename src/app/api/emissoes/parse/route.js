@@ -93,7 +93,14 @@ function extractNFDescricao(lines) {
 
 function extractNFRetencaoISSQN(lines) {
   const parseM = (str) => { if (!str) return null; const m = str.match(/R?\$?\s*([\d.]+,\d{2})/); return m ? m[1] : null; };
-  // "ISSQN Retido" / "Retenção do ISSQN" / "Retido pelo Tomador" — value on next line or same line
+
+  // NFS-e Nacional (DANFSe v2.0): "Retenção do ISSQN" tem como valor o TIPO
+  // ("Retido pelo Tomador" / "Não Retido"), não o R$. O valor efetivo fica em
+  // "Total das Retenções (ISSQN/Federais)" — soma ISSQN + retenções federais.
+  const totalRes = nextLineAfter(lines, /total\s*das\s*reten[çc][oõ]es/i);
+  if (totalRes?.value) { const p = parseM(totalRes.value); if (p) return p; }
+
+  // Formato municipal antigo: "ISSQN Retido" / "Retenção do ISSQN" / "Retido pelo Tomador" — valor na mesma linha ou próxima
   const res = nextLineAfter(lines, /ISSQN\s*Retid[ao]/i)
     || nextLineAfter(lines, /Reten[çc][aã]o\s*do\s*ISSQN/i)
     || nextLineAfter(lines, /ISSQN\s*retido\s*pelo\s*tomador/i);
@@ -103,6 +110,11 @@ function extractNFRetencaoISSQN(lines) {
       const p = parseM(line); if (p) return p;
     }
   }
+
+  // NFS-e Nacional: "ISSQN Apurado" cobre o caso de retenção só municipal
+  const apuradoRes = nextLineAfter(lines, /ISSQN\s*Apurado/i);
+  if (apuradoRes?.value) { const p = parseM(apuradoRes.value); if (p) return p; }
+
   return null;
 }
 

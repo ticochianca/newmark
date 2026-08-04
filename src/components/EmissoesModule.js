@@ -495,10 +495,12 @@ export default function EmissoesModule() {
 
       const clienteMatch = parcelasDoCliente[0]?.contratos?.clientes || null;
 
-      // Tenta casar por valor
+      // Tenta casar por valor — quando várias parcelas batem, prioriza a de vencimento mais próximo (mais antiga em aberto)
       const parsedValor = parseFloat((parsed.valor || '').replace(/\./g, '').replace(',', '.'));
       let parcelaSugerida = parsedValor > 0
-        ? parcelasDoCliente.find(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
+        ? parcelasDoCliente
+            .filter(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
+            .sort((a, b) => new Date(a.data_vencimento) - new Date(b.data_vencimento))[0] || null
         : null;
 
       // Para boleto: casar pelo número do documento (NF)
@@ -557,7 +559,9 @@ export default function EmissoesModule() {
       const clienteMatch = parcelasDoCliente[0]?.contratos?.clientes || null;
       const parsedValor = parseFloat((r.parsed.valor || '').replace(/\./g, '').replace(',', '.'));
       let parcelaSugerida = parsedValor > 0
-        ? parcelasDoCliente.find(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
+        ? parcelasDoCliente
+            .filter(p => Math.abs(Number(p.valor) - parsedValor) < 0.01)
+            .sort((a, b) => new Date(a.data_vencimento) - new Date(b.data_vencimento))[0] || null
         : null;
 
       if (bulkType === 'boleto' && r.parsed.numeroDocumento) {
