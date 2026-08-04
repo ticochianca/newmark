@@ -62,6 +62,14 @@ export async function POST(req) {
       let cep = (cli.cep || '00000000').replace(/\D/g, '');
       if (cep.length === 8) cep = cep.slice(0, 5) + '-' + cep.slice(5);
 
+      // Prioriza a retenção real identificada na NF (retencao_issqn, em R$) sobre o
+      // percentual fixo/estimado do contrato — só cai no percentual quando nenhuma
+      // NF com retenção ainda foi lida para esta parcela.
+      const retReal = Number(p.retencao_issqn) || 0;
+      const valorLiquido = retReal > 0
+        ? Number(p.valor) - retReal
+        : Number(p.valor) * (1 - (p.contratos?.percentual_retencao || 0) / 100);
+
       const row = [
         cli.nome || cli.apelido || 'Cliente Não Identificado', // 0. Nome
         cnpj || '00000000000', // 1. CPF/CNPJ
@@ -79,7 +87,7 @@ export async function POST(req) {
         '', // 13
         'Sim', // 14. Boleto com PIX
         'Boleto', // 15. Forma de Pagamento
-        Number((p.valor * (1 - (p.contratos?.percentual_retencao || 0) / 100)).toFixed(2)), // 16. Valor (NF - retido)
+        Number(valorLiquido.toFixed(2)), // 16. Valor (NF - retido)
         p.nf_numero || String(index + 1).padStart(10, '0'), // 17. Código da cobrança (Usa NF se existir)
         `${p.contratos?.titulo || ''} - Comp: ${getMesPrestacao(p)}`.slice(0, 100), // 18. Descrição
         vencStr, // 19. Data Vencimento

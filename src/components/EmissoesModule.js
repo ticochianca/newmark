@@ -216,7 +216,12 @@ export default function EmissoesModule() {
       .maybeSingle();
 
     setMensagemPadrao(contratoData?.mensagem_padrao || null);
-    setModalRetencao(contratoData?.percentual_retencao || 0);
+    // Prioriza a retenção real já identificada na NF (retencao_issqn, em R$) sobre o
+    // percentual fixo/estimado do contrato — só cai no percentual do contrato quando
+    // nenhuma NF com retenção ainda foi lida para esta parcela.
+    const retReal = Number(p.retencao_issqn) || 0;
+    const pctReal = retReal > 0 && Number(p.valor) > 0 ? (retReal / Number(p.valor)) * 100 : 0;
+    setModalRetencao(pctReal > 0 ? parseFloat(pctReal.toFixed(4)) : (contratoData?.percentual_retencao || 0));
 
     if (clienteId) {
       const hojStr = today.toISOString().split('T')[0];
