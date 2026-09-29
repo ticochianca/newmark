@@ -78,7 +78,7 @@ export default function EmissoesModule() {
     const start = `${ano}-${mesStr}-01`;
     const daysInMonth = new Date(ano, mes, 0).getDate();
     const end = `${ano}-${mesStr}-${String(daysInMonth).padStart(2, '0')}`;
-    const sel = '*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, congelado, congelado_desde, descricao_nf, clientes(id, nome, apelido, email_cobranca, cnpj))';
+    const sel = '*, contratos(id, titulo, cliente_id, cobranca_mesmo_mes, congelado, congelado_desde, descricao_nf, percentual_retencao, clientes(id, nome, apelido, email_cobranca, cnpj))';
 
     const [{ data: monthData, error: err1 }, { data: overdueData, error: err2 }] = await Promise.all([
       supabase.from('parcelas').select(sel)
@@ -2222,6 +2222,18 @@ export default function EmissoesModule() {
                           </td>
                           <td style={{ textAlign: 'right', fontWeight: 600 }}>
                             R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                            {(() => {
+                              const gross = Number(p.valor);
+                              const retAbs = Number(p.retencao_issqn) || 0;
+                              const retPct = p.contratos?.percentual_retencao || 0;
+                              const liquido = retAbs > 0 ? gross - retAbs : retPct > 0 ? gross * (1 - retPct / 100) : null;
+                              if (!liquido) return null;
+                              return (
+                                <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 400, marginTop: '2px' }}>
+                                  boleto: R$ {liquido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                </div>
+                              );
+                            })()}
                           </td>
                         </tr>
                       );
