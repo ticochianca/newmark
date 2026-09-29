@@ -13,10 +13,13 @@ export default function ParcelasModule() {
   const [hoveredParcela, setHoveredParcela] = useState(null);
   const [mostrarAlocacao, setMostrarAlocacao] = useState(false);
   const [anosDisponiveis, setAnosDisponiveis] = useState([]);
-  const [viewMode, setViewMode] = useState('cronograma'); // 'cronograma' | 'tabela'
+  const [viewMode, setViewMode] = useState('cronograma'); // 'cronograma' | 'tabela' | 'atrasadas'
   const [filtroCliente, setFiltroCliente] = useState('');
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
+  const [atrasadas, setAtrasadas] = useState([]);
+  const [loadingAtrasadas, setLoadingAtrasadas] = useState(false);
+  const [atrasadasCount, setAtrasadasCount] = useState(0);
 
   const tableWrapperRef = useRef(null);
 
@@ -95,9 +98,55 @@ export default function ParcelasModule() {
     setLoading(false);
   };
 
+  // Parcelas em atraso: status ainda aberto (não Paga/Reprogramada/Congelada — mesma
+  // definição usada em getStatusDisplay) e vencimento no passado, independente do
+  // Ano Base selecionado — para não esconder atrasos de anos anteriores.
+  const fetchAtrasadas = async () => {
+    setLoadingAtrasadas(true);
+    const hoje = new Date().toISOString().split('T')[0];
+    const { data, error } = await supabase
+      .from('parcelas')
+      .select('*, contratos(id, titulo, cobranca_mesmo_mes, clientes(nome, apelido), contrato_atendentes(*, profiles(nome)))')
+      .not('status', 'in', '(Paga,Reprogramada,Congelada)')
+      .lt('data_vencimento', hoje)
+      .order('data_vencimento', { ascending: true });
+
+    if (error) {
+      console.error('Erro ao buscar parcelas atrasadas:', error);
+    } else {
+      setAtrasadas(data || []);
+      setAtrasadasCount((data || []).length);
+    }
+    setLoadingAtrasadas(false);
+  };
+
+  // Refresca a view atual e, se estivermos na tela de Atrasadas, também aquela lista
+  const refetchAll = () => {
+    fetchParcelas();
+    if (viewMode === 'atrasadas') fetchAtrasadas();
+  };
+
   useEffect(() => {
     fetchParcelas();
   }, [anoSelecionado, dataInicio, dataFim]);
+
+  // Badge com a contagem de atrasadas, carregado uma vez ao abrir o módulo
+  useEffect(() => {
+    const fetchCount = async () => {
+      const hoje = new Date().toISOString().split('T')[0];
+      const { count } = await supabase
+        .from('parcelas')
+        .select('*', { count: 'exact', head: true })
+        .not('status', 'in', '(Paga,Reprogramada,Congelada)')
+        .lt('data_vencimento', hoje);
+      setAtrasadasCount(count || 0);
+    };
+    fetchCount();
+  }, []);
+
+  useEffect(() => {
+    if (viewMode === 'atrasadas') fetchAtrasadas();
+  }, [viewMode]);
 
   useEffect(() => {
     const fetchAnos = async () => {
@@ -224,7 +273,7 @@ export default function ParcelasModule() {
       .from('parcelas')
       .update({ status: 'Paga', data_pagamento: hoje })
       .eq('id', p.id);
-    if (!error) { fetchParcelas(); setHoveredParcela(null); }
+    if (!error) { refetchAll(); setHoveredParcela(null); }
     else alert('Erro: ' + error.message);
   };
 
@@ -234,7 +283,7 @@ export default function ParcelasModule() {
       .from('parcelas')
       .update({ status: 'Pendente', data_pagamento: null })
       .eq('id', p.id);
-    if (!error) { fetchParcelas(); setHoveredParcela(null); }
+    if (!error) { refetchAll(); setHoveredParcela(null); }
     else alert('Erro: ' + error.message);
   };
 
@@ -254,7 +303,7 @@ export default function ParcelasModule() {
       .from('parcelas')
       .update({ data_vencimento: novaData, historico_reprogramacao: hist })
       .eq('id', p.id);
-    if (!error) { fetchParcelas(); setHoveredParcela(null); }
+    if (!error) { refetchAll(); setHoveredParcela(null); }
     else alert('Erro: ' + error.message);
   };
 
@@ -303,7 +352,7 @@ export default function ParcelasModule() {
         .eq('id', realId);
 
       if (error) alert('Erro: ' + error.message);
-      else { setModalState({ isOpen: false, parcela: null }); fetchParcelas(); }
+      else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
     }
     else if (mode === 'desfazer_pagamento') {
       if(!window.confirm("Deseja realmente desfazer este pagamento? A parcela voltará a ficar pendente.")) return;
@@ -313,7 +362,7 @@ export default function ParcelasModule() {
         .eq('id', realId);
 
       if (error) alert('Erro: ' + error.message);
-      else { setModalState({ isOpen: false, parcela: null }); fetchParcelas(); }
+      else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
     }
     else if (mode === 'emitir_pontual') {
       const novoValor = parseFloat(modalState.valorPontual) || parcela.valor;
@@ -325,7 +374,7 @@ export default function ParcelasModule() {
         })
         .eq('id', realId);
       if (error) alert('Erro: ' + error.message);
-      else { setModalState({ isOpen: false, parcela: null }); fetchParcelas(); }
+      else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
     }
     else if (mode === 'reprogramar') {
       const hist = parcela.historico_reprogramacao || [];
@@ -348,7 +397,7 @@ export default function ParcelasModule() {
         .eq('id', realId);
 
       if (error) alert('Erro: ' + error.message);
-      else { setModalState({ isOpen: false, parcela: null }); fetchParcelas(); }
+      else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
     }
     else if (mode === 'ajustar_valor') {
       if (!valorChanged) { alert('Nenhuma alteração de valor detectada.'); return; }
@@ -357,7 +406,7 @@ export default function ParcelasModule() {
         .update({ ...valorUpdate, ...buildHistoricoValor() })
         .eq('id', realId);
       if (error) alert('Erro: ' + error.message);
-      else { setModalState({ isOpen: false, parcela: null }); fetchParcelas(); }
+      else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
     }
   };
 
@@ -394,8 +443,8 @@ export default function ParcelasModule() {
     if (error) {
       alert("Erro: " + error.message);
     } else {
-      setModalState({ isOpen: false, parcela: null }); 
-      fetchParcelas();
+      setModalState({ isOpen: false, parcela: null });
+      refetchAll();
     }
   };
 
@@ -405,7 +454,7 @@ export default function ParcelasModule() {
     if (!window.confirm(`Excluir ${label}? Esta ação não pode ser desfeita.`)) return;
     const { error } = await supabase.from('parcelas').delete().eq('id', realId);
     if (error) alert('Erro: ' + error.message);
-    else { setModalState({ isOpen: false, parcela: null }); fetchParcelas(); }
+    else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
   };
 
   const getStatusDisplay = (p) => {
@@ -463,24 +512,56 @@ export default function ParcelasModule() {
     return nome.includes(termo) || apelido.includes(termo);
   });
 
+  const getDiasAtraso = (dataVencimento) => {
+    const venc = new Date(dataVencimento + 'T00:00:00');
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    return Math.floor((hoje - venc) / 86400000);
+  };
+
+  const atrasadasFiltradas = atrasadas.filter(p => {
+    if (!filtroCliente) return true;
+    const nome = (p.contratos?.clientes?.nome || '').toLowerCase();
+    const apelido = (p.contratos?.clientes?.apelido || '').toLowerCase();
+    const termo = filtroCliente.toLowerCase();
+    return nome.includes(termo) || apelido.includes(termo);
+  });
+
+  const totalAtrasado = atrasadasFiltradas.reduce((s, p) => s + Number(p.valor || 0), 0);
+
   return (
     <section className="content-area active">
       <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', alignItems: 'center' }}>
         <h2 style={{marginRight: '16px', color: 'var(--secondary)', fontSize: '18px'}}>Cronograma de Parcelas</h2>
         <div className="btn-group" style={{ display: 'flex', marginRight: '16px' }}>
-          <button 
+          <button
             className={`btn ${viewMode === 'cronograma' ? 'btn-primary' : 'btn-secondary'}`}
             style={{ borderRadius: '6px 0 0 6px', borderRight: 'none', padding: '6px 12px', fontSize: '14px' }}
             onClick={() => setViewMode('cronograma')}
           >
             Cronograma
           </button>
-          <button 
+          <button
             className={`btn ${viewMode === 'tabela' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ borderRadius: '0 6px 6px 0', padding: '6px 12px', fontSize: '14px' }}
+            style={{ borderRadius: '0', borderRight: 'none', padding: '6px 12px', fontSize: '14px' }}
             onClick={() => setViewMode('tabela')}
           >
             Tabela
+          </button>
+          <button
+            className={`btn ${viewMode === 'atrasadas' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ borderRadius: '0 6px 6px 0', padding: '6px 12px', fontSize: '14px' }}
+            onClick={() => setViewMode('atrasadas')}
+          >
+            Atrasadas
+            {atrasadasCount > 0 && (
+              <span style={{
+                marginLeft: '6px', background: viewMode === 'atrasadas' ? 'rgba(255,255,255,0.25)' : '#ef4444',
+                color: '#fff', borderRadius: '10px', fontSize: '10px', fontWeight: 700, padding: '1px 6px',
+              }}>
+                {atrasadasCount}
+              </span>
+            )}
           </button>
         </div>
 
@@ -492,59 +573,128 @@ export default function ParcelasModule() {
           {mostrarAlocacao ? 'Omitir Alocação' : 'Mostrar Alocação'}
         </button>
 
-        <button
-          className="btn btn-secondary"
-          style={{ fontSize: '14px', padding: '6px 12px' }}
-          onClick={() => {
-            const params = new URLSearchParams();
-            if (dataInicio) params.set('de', dataInicio);
-            if (dataFim) params.set('ate', dataFim);
-            if (filtroCliente) params.set('cliente', filtroCliente);
-            if (mostrarAlocacao) params.set('alocacao', '1');
-            window.open(`/relatorio/parcelas?${params.toString()}`, '_blank');
-          }}
-        >
-          🖨 Imprimir
-        </button>
+        {viewMode !== 'atrasadas' && (
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: '14px', padding: '6px 12px' }}
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (dataInicio) params.set('de', dataInicio);
+              if (dataFim) params.set('ate', dataFim);
+              if (filtroCliente) params.set('cliente', filtroCliente);
+              if (mostrarAlocacao) params.set('alocacao', '1');
+              window.open(`/relatorio/parcelas?${params.toString()}`, '_blank');
+            }}
+          >
+            🖨 Imprimir
+          </button>
+        )}
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto' }}>
-          <input 
-            type="text" 
-            className="form-control" 
-            placeholder="Filtrar cliente..." 
+          <input
+            type="text"
+            className="form-control"
+            placeholder="Filtrar cliente..."
             value={filtroCliente}
             onChange={(e) => setFiltroCliente(e.target.value)}
             style={{ width: '150px' }}
           />
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '4px 8px', borderRadius: '6px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>De:</span>
-            <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Até:</span>
-            <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
-            {(dataInicio || dataFim || filtroCliente) && (
-              <button 
-                className="btn btn-secondary" 
-                style={{ padding: '2px 8px', fontSize: '11px' }} 
-                onClick={() => { setDataInicio(''); setDataFim(''); setFiltroCliente(''); }}
-              >
-                Limpar
-              </button>
-            )}
-          </div>
+          {viewMode !== 'atrasadas' && (
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '4px 8px', borderRadius: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>De:</span>
+              <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
+              <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Até:</span>
+              <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
+              {(dataInicio || dataFim || filtroCliente) && (
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '2px 8px', fontSize: '11px' }}
+                  onClick={() => { setDataInicio(''); setDataFim(''); setFiltroCliente(''); }}
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
+          )}
         </div>
-        <label style={{fontWeight: 600, color: 'var(--secondary)', marginLeft: '16px'}}>Ano Base:</label>
-        <select 
-          className="form-control" 
-          style={{ width: '120px' }} 
-          value={anoSelecionado}
-          onChange={(e) => setAnoSelecionado(parseInt(e.target.value, 10))}
-        >
-          {(anosDisponiveis.length > 0 ? anosDisponiveis : [currentYear - 1, currentYear, currentYear, currentYear + 1, currentYear + 2]).map(year => (
-            <option key={year} value={year}>{year}</option>
-          ))}
-        </select>
+        {viewMode !== 'atrasadas' && (
+          <>
+            <label style={{fontWeight: 600, color: 'var(--secondary)', marginLeft: '16px'}}>Ano Base:</label>
+            <select
+              className="form-control"
+              style={{ width: '120px' }}
+              value={anoSelecionado}
+              onChange={(e) => setAnoSelecionado(parseInt(e.target.value, 10))}
+            >
+              {(anosDisponiveis.length > 0 ? anosDisponiveis : [currentYear - 1, currentYear, currentYear, currentYear + 1, currentYear + 2]).map(year => (
+                <option key={year} value={year}>{year}</option>
+              ))}
+            </select>
+          </>
+        )}
       </div>
 
-      {viewMode === 'tabela' ? (
+      {viewMode === 'atrasadas' ? (
+        <div>
+          <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', flexWrap: 'wrap' }}>
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '12px 20px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: '#991b1b', textTransform: 'uppercase' }}>Parcelas em atraso</div>
+              <div style={{ fontSize: '24px', fontWeight: 700, color: '#dc2626' }}>{atrasadasFiltradas.length}</div>
+            </div>
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '12px 20px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: '#991b1b', textTransform: 'uppercase' }}>Total em atraso</div>
+              <div style={{ fontSize: '24px', fontWeight: 700, color: '#dc2626' }}>R$ {totalAtrasado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+            </div>
+          </div>
+
+          <div className="table-container" style={{ overflowX: 'auto', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid var(--border)' }}>
+            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid var(--border)' }}>
+                  <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)' }}>Cliente / Contrato</th>
+                  <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)' }}>Competência</th>
+                  <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)' }}>Vencimento</th>
+                  <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 600, color: 'var(--secondary)' }}>Dias em atraso</th>
+                  <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: 'var(--secondary)' }}>Valor</th>
+                  <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 600, color: 'var(--secondary)' }}>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingAtrasadas ? (
+                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '40px' }}>Carregando...</td></tr>
+                ) : atrasadasFiltradas.length === 0 ? (
+                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>🎉 Nenhuma parcela em atraso.</td></tr>
+                ) : (
+                  atrasadasFiltradas.map(p => {
+                    const dias = getDiasAtraso(p.data_vencimento);
+                    return (
+                      <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }} className="hover-row">
+                        <td style={{ padding: '12px 16px' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--secondary)' }}>{p.contratos?.clientes?.apelido || p.contratos?.clientes?.nome}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{p.contratos?.titulo}</div>
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>{getMesPrestacao(p)}</td>
+                        <td style={{ padding: '12px 16px' }}>{new Date(p.data_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                          <span style={{ padding: '4px 8px', borderRadius: '12px', fontSize: '11px', fontWeight: 700, backgroundColor: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca' }}>
+                            {dias} {dias === 1 ? 'dia' : 'dias'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600 }}>R$ {Number(p.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                            <button className="btn btn-primary" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => handlePagarRapido({ stopPropagation: () => {} }, p)}>Pagar</button>
+                            <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }} onClick={() => openModal(p)}>Editar</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : viewMode === 'tabela' ? (
         <div className="table-container" style={{ overflowX: 'auto', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid var(--border)' }}>
           <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
