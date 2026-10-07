@@ -13,18 +13,22 @@ export default function ParcelasModule() {
   const [hoveredParcela, setHoveredParcela] = useState(null);
   const [mostrarAlocacao, setMostrarAlocacao] = useState(false);
   const [anosDisponiveis, setAnosDisponiveis] = useState([]);
-  const [viewMode, setViewMode] = useState('cronograma'); // 'cronograma' | 'tabela' | 'atrasadas'
+  const [viewMode, setViewMode] = useState('cronograma'); // 'cronograma' | 'tabela' | 'atrasadas' | 'trimestral'
   const [filtroCliente, setFiltroCliente] = useState('');
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [atrasadas, setAtrasadas] = useState([]);
   const [loadingAtrasadas, setLoadingAtrasadas] = useState(false);
   const [atrasadasCount, setAtrasadasCount] = useState(0);
+  const [recebidoPago, setRecebidoPago] = useState([]);
+  const [loadingTrimestral, setLoadingTrimestral] = useState(false);
+  const [trimDe, setTrimDe] = useState('');
+  const [trimAte, setTrimAte] = useState('');
 
   const tableWrapperRef = useRef(null);
 
   // Action Modal State
-  const [modalState, setModalState] = useState({ isOpen: false, parcela: null, realId: null, mode: 'pagar', data: '', nfNumero: '', boletoVencimento: '', valorPontual: '', valorAjuste: '', obsAjuste: '' });
+  const [modalState, setModalState] = useState({ isOpen: false, parcela: null, realId: null, mode: 'pagar', data: '', nfNumero: '', boletoVencimento: '', valorPontual: '', valorAjuste: '', obsAjuste: '', forcarAntecipacao: false, dataAntecipacao: '' });
 
   const fetchParcelas = async () => {
     setLoading(true);
@@ -50,8 +54,10 @@ export default function ParcelasModule() {
           };
         }
         
-        const isPaidInDiffMonth = p.status === 'Paga' && p.data_pagamento && p.data_vencimento.substring(0,7) !== p.data_pagamento.substring(0,7);
-        const activeDate = (p.status === 'Paga' && p.data_pagamento) ? p.data_pagamento : p.data_vencimento;
+        // data_antecipacao, quando preenchida, substitui data_pagamento só para fins de agrupamento/análise
+        const dataRecebimento = p.data_antecipacao || p.data_pagamento;
+        const isPaidInDiffMonth = p.status === 'Paga' && dataRecebimento && p.data_vencimento.substring(0,7) !== dataRecebimento.substring(0,7);
+        const activeDate = (p.status === 'Paga' && dataRecebimento) ? dataRecebimento : p.data_vencimento;
         
         const monthActive = parseInt(activeDate.split('-')[1], 10);
         const yearActive = parseInt(activeDate.split('-')[0], 10);
@@ -120,10 +126,30 @@ export default function ParcelasModule() {
     setLoadingAtrasadas(false);
   };
 
-  // Refresca a view atual e, se estivermos na tela de Atrasadas, também aquela lista
+  // Recebimentos (parcelas Pagas) de todo o histórico, para comparar totais por trimestre.
+  // data_antecipacao, quando preenchida, substitui data_pagamento só para fins de agrupamento.
+  const fetchRecebidoPago = async () => {
+    setLoadingTrimestral(true);
+    const { data, error } = await supabase
+      .from('parcelas')
+      .select('valor, data_pagamento, data_antecipacao, contratos(clientes(nome, apelido))')
+      .eq('status', 'Paga')
+      .not('data_pagamento', 'is', null)
+      .order('data_pagamento', { ascending: true });
+
+    if (error) {
+      console.error('Erro ao buscar recebimentos:', error);
+    } else {
+      setRecebidoPago((data || []).map(p => ({ ...p, _data: p.data_antecipacao || p.data_pagamento })));
+    }
+    setLoadingTrimestral(false);
+  };
+
+  // Refresca a view atual e, se estivermos na tela de Atrasadas/Trimestral, também aquela lista
   const refetchAll = () => {
     fetchParcelas();
     if (viewMode === 'atrasadas') fetchAtrasadas();
+    if (viewMode === 'trimestral' || viewMode === 'mensal') fetchRecebidoPago();
   };
 
   useEffect(() => {
@@ -146,6 +172,7 @@ export default function ParcelasModule() {
 
   useEffect(() => {
     if (viewMode === 'atrasadas') fetchAtrasadas();
+    if (viewMode === 'trimestral' || viewMode === 'mensal') fetchRecebidoPago();
   }, [viewMode]);
 
   useEffect(() => {
@@ -263,6 +290,8 @@ export default function ParcelasModule() {
       valorPontual: p.valor != null ? p.valor.toString() : '',
       valorAjuste: p.valor != null ? p.valor.toString() : '',
       obsAjuste: '',
+      forcarAntecipacao: !!p.data_antecipacao,
+      dataAntecipacao: p.data_antecipacao || '',
     });
   };
 
@@ -309,9 +338,10 @@ export default function ParcelasModule() {
 
   const handleActionSubmit = async (e) => {
     e.preventDefault();
-    const { parcela, realId, mode, data: inputData, nfNumero, boletoVencimento, valorAjuste, obsAjuste } = modalState;
+    const { parcela, realId, mode, data: inputData, nfNumero, boletoVencimento, valorAjuste, obsAjuste, forcarAntecipacao, dataAntecipacao } = modalState;
 
     const nfUpdate = { nf_numero: nfNumero || null };
+    const antecipacaoUpdate = { data_antecipacao: forcarAntecipacao && dataAntecipacao ? dataAntecipacao : null };
 
     // Valor adjustment: track if value changed from current
     const novoValor = parseFloat(valorAjuste) || parcela.valor;
@@ -348,6 +378,7 @@ export default function ParcelasModule() {
           ...nfUpdate,
           ...valorUpdate,
           ...buildHistoricoValor(),
+          ...antecipacaoUpdate,
         })
         .eq('id', realId);
 
@@ -358,7 +389,7 @@ export default function ParcelasModule() {
       if(!window.confirm("Deseja realmente desfazer este pagamento? A parcela voltará a ficar pendente.")) return;
       const { error } = await supabase
         .from('parcelas')
-        .update({ status: 'Pendente', data_pagamento: null, ...nfUpdate })
+        .update({ status: 'Pendente', data_pagamento: null, data_antecipacao: null, ...nfUpdate })
         .eq('id', realId);
 
       if (error) alert('Erro: ' + error.message);
@@ -393,6 +424,7 @@ export default function ParcelasModule() {
           ...nfUpdate,
           ...valorUpdate,
           ...buildHistoricoValor(),
+          ...antecipacaoUpdate,
         })
         .eq('id', realId);
 
@@ -403,7 +435,7 @@ export default function ParcelasModule() {
       if (!valorChanged) { alert('Nenhuma alteração de valor detectada.'); return; }
       const { error } = await supabase
         .from('parcelas')
-        .update({ ...valorUpdate, ...buildHistoricoValor() })
+        .update({ ...valorUpdate, ...buildHistoricoValor(), ...antecipacaoUpdate })
         .eq('id', realId);
       if (error) alert('Erro: ' + error.message);
       else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
@@ -504,6 +536,16 @@ export default function ParcelasModule() {
 
   const mesesHeaders = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
+  // Quando há filtro de período (De/Até), esconde do cronograma os meses fora do intervalo
+  const mesesVisiveis = [1,2,3,4,5,6,7,8,9,10,11,12].filter(m => {
+    if (!dataInicio && !dataFim) return true;
+    const primeiroDia = `${anoSelecionado}-${String(m).padStart(2, '0')}-01`;
+    const ultimoDia = new Date(anoSelecionado, m, 0).toISOString().split('T')[0];
+    if (dataInicio && ultimoDia < dataInicio) return false;
+    if (dataFim && primeiroDia > dataFim) return false;
+    return true;
+  });
+
   const dataFiltrada = parcelasAgrupadas.filter(g => {
     if (!filtroCliente) return true;
     const nome = (g.contrato?.clientes?.nome || '').toLowerCase();
@@ -529,6 +571,83 @@ export default function ParcelasModule() {
 
   const totalAtrasado = atrasadasFiltradas.reduce((s, p) => s + Number(p.valor || 0), 0);
 
+  // ─── Comparativo Trimestral (recebimentos pagos, por cliente) ────────────
+  const getQuarterKey = (dateStr) => {
+    const [y, m] = dateStr.split('-').map(Number);
+    return `${y}-Q${Math.ceil(m / 3)}`;
+  };
+  const quarterLabel = (key) => {
+    const [y, q] = key.split('-Q');
+    return `T${q}/${y.slice(2)}`;
+  };
+
+  const fmtR$ = (v) => `R$ ${Math.round(v || 0).toLocaleString('pt-BR')}`;
+
+  // Variação da célula vs. a coluna (trimestre) anterior visível na tabela
+  const getVariacao = (atual, anterior) => {
+    if (atual == null || !anterior) return null;
+    const pct = ((atual - anterior) / anterior) * 100;
+    if (Math.abs(pct) < 0.5) return { dir: 'flat', pct };
+    return { dir: pct > 0 ? 'up' : 'down', pct };
+  };
+
+  const recebidoFiltrado = recebidoPago.filter(p => {
+    if (filtroCliente) {
+      const nome = (p.contratos?.clientes?.nome || '').toLowerCase();
+      const apelido = (p.contratos?.clientes?.apelido || '').toLowerCase();
+      const termo = filtroCliente.toLowerCase();
+      if (!nome.includes(termo) && !apelido.includes(termo)) return false;
+    }
+    if (trimDe && p._data < trimDe) return false;
+    if (trimAte && p._data > trimAte) return false;
+    return true;
+  });
+
+  const trimestres = Array.from(new Set(recebidoFiltrado.map(p => getQuarterKey(p._data)))).sort();
+
+  const clientesTrimestre = {}; // nome do cliente → { trimestreKey: totalRecebido }
+  recebidoFiltrado.forEach(p => {
+    const nome = p.contratos?.clientes?.apelido || p.contratos?.clientes?.nome || 'Sem cliente';
+    const qk = getQuarterKey(p._data);
+    if (!clientesTrimestre[nome]) clientesTrimestre[nome] = {};
+    clientesTrimestre[nome][qk] = (clientesTrimestre[nome][qk] || 0) + Number(p.valor || 0);
+  });
+  const clientesOrdenados = Object.keys(clientesTrimestre).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  const totaisTrimestre = {}; // trimestreKey → total geral recebido
+  recebidoFiltrado.forEach(p => {
+    const qk = getQuarterKey(p._data);
+    totaisTrimestre[qk] = (totaisTrimestre[qk] || 0) + Number(p.valor || 0);
+  });
+
+  // ─── Comparativo Mensal (mesma base de recebidoFiltrado, agrupado por mês) ─
+  const getMonthKey = (dateStr) => dateStr.slice(0, 7); // YYYY-MM
+  const monthLabel = (key) => {
+    const [y, m] = key.split('-');
+    const d = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+    const mes = d.toLocaleString('pt-BR', { month: 'short' }).replace('.', '');
+    return `${mes.charAt(0).toUpperCase() + mes.slice(1)}/${y.slice(2)}`;
+  };
+
+  const meses = Array.from(new Set(recebidoFiltrado.map(p => getMonthKey(p._data)))).sort();
+
+  const clientesMes = {}; // nome do cliente → { mesKey: totalRecebido }
+  recebidoFiltrado.forEach(p => {
+    const nome = p.contratos?.clientes?.apelido || p.contratos?.clientes?.nome || 'Sem cliente';
+    const mk = getMonthKey(p._data);
+    if (!clientesMes[nome]) clientesMes[nome] = {};
+    clientesMes[nome][mk] = (clientesMes[nome][mk] || 0) + Number(p.valor || 0);
+  });
+  const clientesMesOrdenados = Object.keys(clientesMes).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  const totaisMes = {}; // mesKey → total geral recebido
+  recebidoFiltrado.forEach(p => {
+    const mk = getMonthKey(p._data);
+    totaisMes[mk] = (totaisMes[mk] || 0) + Number(p.valor || 0);
+  });
+
+  const isPivotView = viewMode === 'atrasadas' || viewMode === 'trimestral' || viewMode === 'mensal';
+
   return (
     <section className="content-area active">
       <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', alignItems: 'center' }}>
@@ -550,7 +669,7 @@ export default function ParcelasModule() {
           </button>
           <button
             className={`btn ${viewMode === 'atrasadas' ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ borderRadius: '0 6px 6px 0', padding: '6px 12px', fontSize: '14px' }}
+            style={{ borderRadius: '0', borderRight: 'none', padding: '6px 12px', fontSize: '14px' }}
             onClick={() => setViewMode('atrasadas')}
           >
             Atrasadas
@@ -563,6 +682,20 @@ export default function ParcelasModule() {
               </span>
             )}
           </button>
+          <button
+            className={`btn ${viewMode === 'trimestral' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ borderRadius: '0', borderRight: 'none', padding: '6px 12px', fontSize: '14px' }}
+            onClick={() => setViewMode('trimestral')}
+          >
+            Trimestral
+          </button>
+          <button
+            className={`btn ${viewMode === 'mensal' ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ borderRadius: '0 6px 6px 0', padding: '6px 12px', fontSize: '14px' }}
+            onClick={() => setViewMode('mensal')}
+          >
+            Mensal
+          </button>
         </div>
 
         <button
@@ -573,7 +706,7 @@ export default function ParcelasModule() {
           {mostrarAlocacao ? 'Omitir Alocação' : 'Mostrar Alocação'}
         </button>
 
-        {viewMode !== 'atrasadas' && (
+        {!isPivotView && (
           <button
             className="btn btn-secondary"
             style={{ fontSize: '14px', padding: '6px 12px' }}
@@ -598,7 +731,7 @@ export default function ParcelasModule() {
             onChange={(e) => setFiltroCliente(e.target.value)}
             style={{ width: '150px' }}
           />
-          {viewMode !== 'atrasadas' && (
+          {!isPivotView && (
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '4px 8px', borderRadius: '6px' }}>
               <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>De:</span>
               <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
@@ -616,7 +749,7 @@ export default function ParcelasModule() {
             </div>
           )}
         </div>
-        {viewMode !== 'atrasadas' && (
+        {!isPivotView && (
           <>
             <label style={{fontWeight: 600, color: 'var(--secondary)', marginLeft: '16px'}}>Ano Base:</label>
             <select
@@ -691,6 +824,264 @@ export default function ParcelasModule() {
                   })
                 )}
               </tbody>
+            </table>
+          </div>
+        </div>
+      ) : viewMode === 'trimestral' ? (
+        <div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px', backgroundColor: '#f1f5f9', padding: '8px 12px', borderRadius: '6px', width: 'fit-content' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Período:</span>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>De:</span>
+            <input type="date" className="form-control" style={{ width: '130px', padding: '2px 4px', fontSize: '12px' }} value={trimDe} onChange={(e) => setTrimDe(e.target.value)} />
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Até:</span>
+            <input type="date" className="form-control" style={{ width: '130px', padding: '2px 4px', fontSize: '12px' }} value={trimAte} onChange={(e) => setTrimAte(e.target.value)} />
+            {(trimDe || trimAte) && (
+              <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={() => { setTrimDe(''); setTrimAte(''); }}>Limpar</button>
+            )}
+            <button
+              className="btn btn-secondary"
+              style={{ fontSize: '13px', padding: '4px 12px', marginLeft: '8px' }}
+              onClick={() => {
+                const params = new URLSearchParams();
+                if (trimDe) params.set('de', trimDe);
+                if (trimAte) params.set('ate', trimAte);
+                if (filtroCliente) params.set('cliente', filtroCliente);
+                window.open(`/relatorio/trimestral?${params.toString()}`, '_blank');
+              }}
+            >
+              🖨 Imprimir
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', flexWrap: 'wrap' }}>
+            <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '12px 20px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: '#065f46', textTransform: 'uppercase' }}>Total recebido no período</div>
+              <div style={{ fontSize: '24px', fontWeight: 700, color: '#059669' }}>
+                {fmtR$(Object.values(totaisTrimestre).reduce((s, v) => s + v, 0))}
+              </div>
+            </div>
+            {trimestres.length >= 2 && (() => {
+              const atual = totaisTrimestre[trimestres[trimestres.length - 1]] || 0;
+              const anterior = totaisTrimestre[trimestres[trimestres.length - 2]] || 0;
+              const variacao = anterior > 0 ? ((atual - anterior) / anterior) * 100 : null;
+              const subiu = variacao != null && variacao >= 0;
+              return (
+                <div style={{ background: subiu ? '#ecfdf5' : '#fef2f2', border: `1px solid ${subiu ? '#a7f3d0' : '#fecaca'}`, borderRadius: '8px', padding: '12px 20px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: subiu ? '#065f46' : '#991b1b', textTransform: 'uppercase' }}>
+                    {quarterLabel(trimestres[trimestres.length - 1])} vs {quarterLabel(trimestres[trimestres.length - 2])}
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 700, color: subiu ? '#059669' : '#dc2626' }}>
+                    {variacao == null ? '—' : `${subiu ? '▲' : '▼'} ${Math.abs(variacao).toFixed(1)}%`}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          <div className="table-container" style={{ overflowX: 'auto', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid var(--border)' }}>
+            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid var(--border)' }}>
+                  <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)', position: 'sticky', left: 0, backgroundColor: '#f8fafc' }}>Cliente</th>
+                  {trimestres.map(qk => (
+                    <th key={qk} style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: 'var(--secondary)', whiteSpace: 'nowrap' }}>{quarterLabel(qk)}</th>
+                  ))}
+                  <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: 'var(--secondary)', borderLeft: '2px solid var(--border)', whiteSpace: 'nowrap' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingTrimestral ? (
+                  <tr><td colSpan={trimestres.length + 2} style={{ textAlign: 'center', padding: '40px' }}>Carregando...</td></tr>
+                ) : clientesOrdenados.length === 0 ? (
+                  <tr><td colSpan={trimestres.length + 2} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Nenhum recebimento encontrado.</td></tr>
+                ) : (
+                  clientesOrdenados.map(nome => {
+                    const porTrimestre = clientesTrimestre[nome];
+                    const totalCliente = Object.values(porTrimestre).reduce((s, v) => s + v, 0);
+                    return (
+                      <tr key={nome} style={{ borderBottom: '1px solid var(--border)' }} className="hover-row">
+                        <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--secondary)', position: 'sticky', left: 0, backgroundColor: '#fff', whiteSpace: 'nowrap' }}>{nome}</td>
+                        {trimestres.map((qk, idx) => {
+                          const valor = porTrimestre[qk];
+                          const anteriorQk = idx > 0 ? trimestres[idx - 1] : null;
+                          const v = anteriorQk ? getVariacao(valor, porTrimestre[anteriorQk]) : null;
+                          return (
+                            <td key={qk} style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              {valor != null ? (
+                                <>
+                                  <div>{fmtR$(valor)}</div>
+                                  {v && v.dir !== 'flat' && (
+                                    <div style={{ fontSize: '10px', fontWeight: 700, color: v.dir === 'up' ? '#059669' : '#dc2626' }}>
+                                      {v.dir === 'up' ? '▲' : '▼'} {Math.abs(v.pct).toFixed(0)}%
+                                    </div>
+                                  )}
+                                </>
+                              ) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                            </td>
+                          );
+                        })}
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, borderLeft: '2px solid var(--border)', whiteSpace: 'nowrap' }}>
+                          {fmtR$(totalCliente)}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+              {clientesOrdenados.length > 0 && (
+                <tfoot>
+                  <tr style={{ backgroundColor: '#0f172a' }}>
+                    <td style={{ padding: '12px 16px', fontWeight: 700, color: '#fff', position: 'sticky', left: 0, backgroundColor: '#0f172a', whiteSpace: 'nowrap' }}>TOTAL</td>
+                    {trimestres.map((qk, idx) => {
+                      const valor = totaisTrimestre[qk] || 0;
+                      const anteriorQk = idx > 0 ? trimestres[idx - 1] : null;
+                      const v = anteriorQk ? getVariacao(valor, totaisTrimestre[anteriorQk]) : null;
+                      return (
+                        <td key={qk} style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>
+                          <div>{fmtR$(valor)}</div>
+                          {v && v.dir !== 'flat' && (
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: v.dir === 'up' ? '#4ade80' : '#f87171' }}>
+                              {v.dir === 'up' ? '▲' : '▼'} {Math.abs(v.pct).toFixed(0)}%
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: '#fff', borderLeft: '2px solid #334155', whiteSpace: 'nowrap' }}>
+                      {fmtR$(Object.values(totaisTrimestre).reduce((s, v) => s + v, 0))}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
+      ) : viewMode === 'mensal' ? (
+        <div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px', backgroundColor: '#f1f5f9', padding: '8px 12px', borderRadius: '6px', width: 'fit-content' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Período:</span>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>De:</span>
+            <input type="date" className="form-control" style={{ width: '130px', padding: '2px 4px', fontSize: '12px' }} value={trimDe} onChange={(e) => setTrimDe(e.target.value)} />
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Até:</span>
+            <input type="date" className="form-control" style={{ width: '130px', padding: '2px 4px', fontSize: '12px' }} value={trimAte} onChange={(e) => setTrimAte(e.target.value)} />
+            {(trimDe || trimAte) && (
+              <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={() => { setTrimDe(''); setTrimAte(''); }}>Limpar</button>
+            )}
+            <button
+              className="btn btn-secondary"
+              style={{ fontSize: '13px', padding: '4px 12px', marginLeft: '8px' }}
+              onClick={() => {
+                const params = new URLSearchParams();
+                if (trimDe) params.set('de', trimDe);
+                if (trimAte) params.set('ate', trimAte);
+                if (filtroCliente) params.set('cliente', filtroCliente);
+                window.open(`/relatorio/mensal?${params.toString()}`, '_blank');
+              }}
+            >
+              🖨 Imprimir
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', flexWrap: 'wrap' }}>
+            <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '8px', padding: '12px 20px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: '#065f46', textTransform: 'uppercase' }}>Total recebido no período</div>
+              <div style={{ fontSize: '24px', fontWeight: 700, color: '#059669' }}>
+                {fmtR$(Object.values(totaisMes).reduce((s, v) => s + v, 0))}
+              </div>
+            </div>
+            {meses.length >= 2 && (() => {
+              const atual = totaisMes[meses[meses.length - 1]] || 0;
+              const anterior = totaisMes[meses[meses.length - 2]] || 0;
+              const variacao = anterior > 0 ? ((atual - anterior) / anterior) * 100 : null;
+              const subiu = variacao != null && variacao >= 0;
+              return (
+                <div style={{ background: subiu ? '#ecfdf5' : '#fef2f2', border: `1px solid ${subiu ? '#a7f3d0' : '#fecaca'}`, borderRadius: '8px', padding: '12px 20px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: subiu ? '#065f46' : '#991b1b', textTransform: 'uppercase' }}>
+                    {monthLabel(meses[meses.length - 1])} vs {monthLabel(meses[meses.length - 2])}
+                  </div>
+                  <div style={{ fontSize: '24px', fontWeight: 700, color: subiu ? '#059669' : '#dc2626' }}>
+                    {variacao == null ? '—' : `${subiu ? '▲' : '▼'} ${Math.abs(variacao).toFixed(1)}%`}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          <div className="table-container" style={{ overflowX: 'auto', backgroundColor: '#fff', borderRadius: '8px', border: '1px solid var(--border)' }}>
+            <table className="table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid var(--border)' }}>
+                  <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--secondary)', position: 'sticky', left: 0, backgroundColor: '#f8fafc' }}>Cliente</th>
+                  {meses.map(mk => (
+                    <th key={mk} style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600, color: 'var(--secondary)', whiteSpace: 'nowrap' }}>{monthLabel(mk)}</th>
+                  ))}
+                  <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: 'var(--secondary)', borderLeft: '2px solid var(--border)', whiteSpace: 'nowrap' }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadingTrimestral ? (
+                  <tr><td colSpan={meses.length + 2} style={{ textAlign: 'center', padding: '40px' }}>Carregando...</td></tr>
+                ) : clientesMesOrdenados.length === 0 ? (
+                  <tr><td colSpan={meses.length + 2} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Nenhum recebimento encontrado.</td></tr>
+                ) : (
+                  clientesMesOrdenados.map(nome => {
+                    const porMes = clientesMes[nome];
+                    const totalCliente = Object.values(porMes).reduce((s, v) => s + v, 0);
+                    return (
+                      <tr key={nome} style={{ borderBottom: '1px solid var(--border)' }} className="hover-row">
+                        <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--secondary)', position: 'sticky', left: 0, backgroundColor: '#fff', whiteSpace: 'nowrap' }}>{nome}</td>
+                        {meses.map((mk, idx) => {
+                          const valor = porMes[mk];
+                          const anteriorMk = idx > 0 ? meses[idx - 1] : null;
+                          const v = anteriorMk ? getVariacao(valor, porMes[anteriorMk]) : null;
+                          return (
+                            <td key={mk} style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              {valor != null ? (
+                                <>
+                                  <div>{fmtR$(valor)}</div>
+                                  {v && v.dir !== 'flat' && (
+                                    <div style={{ fontSize: '10px', fontWeight: 700, color: v.dir === 'up' ? '#059669' : '#dc2626' }}>
+                                      {v.dir === 'up' ? '▲' : '▼'} {Math.abs(v.pct).toFixed(0)}%
+                                    </div>
+                                  )}
+                                </>
+                              ) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                            </td>
+                          );
+                        })}
+                        <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, borderLeft: '2px solid var(--border)', whiteSpace: 'nowrap' }}>
+                          {fmtR$(totalCliente)}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+              {clientesMesOrdenados.length > 0 && (
+                <tfoot>
+                  <tr style={{ backgroundColor: '#0f172a' }}>
+                    <td style={{ padding: '12px 16px', fontWeight: 700, color: '#fff', position: 'sticky', left: 0, backgroundColor: '#0f172a', whiteSpace: 'nowrap' }}>TOTAL</td>
+                    {meses.map((mk, idx) => {
+                      const valor = totaisMes[mk] || 0;
+                      const anteriorMk = idx > 0 ? meses[idx - 1] : null;
+                      const v = anteriorMk ? getVariacao(valor, totaisMes[anteriorMk]) : null;
+                      return (
+                        <td key={mk} style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: '#fff', whiteSpace: 'nowrap' }}>
+                          <div>{fmtR$(valor)}</div>
+                          {v && v.dir !== 'flat' && (
+                            <div style={{ fontSize: '10px', fontWeight: 700, color: v.dir === 'up' ? '#4ade80' : '#f87171' }}>
+                              {v.dir === 'up' ? '▲' : '▼'} {Math.abs(v.pct).toFixed(0)}%
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: '#fff', borderLeft: '2px solid #334155', whiteSpace: 'nowrap' }}>
+                      {fmtR$(Object.values(totaisMes).reduce((s, v) => s + v, 0))}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
         </div>
@@ -804,16 +1195,16 @@ export default function ParcelasModule() {
             <thead>
               <tr>
                 <th style={{width: '250px', position: 'sticky', left: 0, backgroundColor: '#f8fafc', zIndex: 11}}>Cliente / Contrato</th>
-                {mesesHeaders.map((m, i) => (
-                  <th key={i} style={{textAlign: 'center', minWidth: '100px'}}>{m}</th>
+                {mesesVisiveis.map((m) => (
+                  <th key={m} style={{textAlign: 'center', minWidth: '100px'}}>{mesesHeaders[m - 1]}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="13" style={{textAlign: 'center', padding: '40px'}}>Carregando calendário...</td></tr>
+                <tr><td colSpan={mesesVisiveis.length + 1} style={{textAlign: 'center', padding: '40px'}}>Carregando calendário...</td></tr>
               ) : parcelasAgrupadas.length === 0 ? (
-                <tr><td colSpan="13" style={{textAlign: 'center', padding: '40px'}}>Nenhuma parcela encontrada para este ano.</td></tr>
+                <tr><td colSpan={mesesVisiveis.length + 1} style={{textAlign: 'center', padding: '40px'}}>Nenhuma parcela encontrada para este ano.</td></tr>
               ) : (
                 parcelasAgrupadas.map((group, idx) => (
                   <tr key={idx}>
@@ -821,7 +1212,7 @@ export default function ParcelasModule() {
                       <strong style={{color: 'var(--secondary)', display: 'block'}}>{group.contrato?.clientes?.apelido || group.contrato?.clientes?.nome}</strong>
                       <span style={{fontSize: '12px', color: 'var(--text-muted)'}}>{group.contrato?.titulo}</span>
                     </td>
-                    {[1,2,3,4,5,6,7,8,9,10,11,12].map(month => {
+                    {mesesVisiveis.map(month => {
                       // Sort items to put ghosts first, native items, migrated items, and rescheduled items last
                       const sortedItems = [...group.meses[month]].sort((a, b) => {
                         if (a.isGhost && !b.isGhost) return -1;
@@ -1011,7 +1402,7 @@ export default function ParcelasModule() {
                     <span style={{color: 'var(--secondary)'}}>Total Projetado:</span>
                     <div style={{fontSize: '10px', color: 'var(--text-muted)', fontWeight: 'normal'}}>(Realizado + Pendentes)</div>
                   </td>
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(month => {
+                  {mesesVisiveis.map(month => {
                     const projetadoNodes = [];
                     parcelasAgrupadas.forEach(group => {
                       group.meses[month].forEach(p => {
@@ -1070,7 +1461,7 @@ export default function ParcelasModule() {
                     <span style={{color: '#047857'}}>Total Recebido:</span>
                     <div style={{fontSize: '10px', color: '#059669', fontWeight: 'normal'}}>(Pagas Neste Mês)</div>
                   </td>
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(month => {
+                  {mesesVisiveis.map(month => {
                     const recebidoNodes = [];
                     parcelasAgrupadas.forEach(group => {
                       group.meses[month].forEach(p => {
@@ -1286,6 +1677,36 @@ export default function ParcelasModule() {
                           required
                           disabled={modalState.mode === 'desfazer_pagamento'}
                         />
+                      </div>
+                    )}
+
+                    {(modalState.mode === 'pagar' || modalState.mode === 'desfazer_pagamento') && (
+                      <div className="form-group">
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
+                          <input
+                            type="checkbox"
+                            checked={modalState.forcarAntecipacao}
+                            onChange={(e) => setModalState({
+                              ...modalState,
+                              forcarAntecipacao: e.target.checked,
+                              dataAntecipacao: e.target.checked ? (modalState.dataAntecipacao || modalState.data) : '',
+                            })}
+                          />
+                          Forçar antecipação
+                        </label>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block', marginTop: '2px' }}>
+                          Considera outra data nas análises de recebimento (cronograma, trimestral, mensal, variável), sem alterar a data real do pagamento.
+                        </span>
+                        {modalState.forcarAntecipacao && (
+                          <input
+                            type="date"
+                            className="form-control"
+                            style={{ marginTop: '8px' }}
+                            value={modalState.dataAntecipacao}
+                            onChange={(e) => setModalState({ ...modalState, dataAntecipacao: e.target.value })}
+                            required
+                          />
+                        )}
                       </div>
                     )}
 
