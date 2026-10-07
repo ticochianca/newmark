@@ -10,6 +10,8 @@ export default function AlocacoesModule() {
   const [alocacoesAgrupadas, setAlocacoesAgrupadas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [usuarios, setUsuarios] = useState([]);
+  const [dataInicio, setDataInicio] = useState('');
+  const [dataFim, setDataFim] = useState('');
 
   const [allocModalState, setAllocModalState] = useState({ isOpen: false, contrato: null, atendentes: [] });
   const [splitForm, setSplitForm] = useState({
@@ -19,8 +21,8 @@ export default function AlocacoesModule() {
 
   const fetchAlocacoes = async () => {
     setLoading(true);
-    const startRange = `${anoSelecionado - 1}-12-01`;
-    const endRange = `${anoSelecionado + 1}-01-31`;
+    const startRange = dataInicio || `${anoSelecionado - 1}-12-01`;
+    const endRange = dataFim || `${anoSelecionado + 1}-01-31`;
 
     const { data, error } = await supabase
       .from('parcelas')
@@ -88,7 +90,7 @@ export default function AlocacoesModule() {
 
   useEffect(() => {
     fetchAlocacoes();
-  }, [anoSelecionado]);
+  }, [anoSelecionado, dataInicio, dataFim]);
 
   useEffect(() => {
     fetchUsuarios();
@@ -207,8 +209,23 @@ export default function AlocacoesModule() {
 
   return (
     <section className="content-area active">
-      <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
         <h2 style={{marginRight: 'auto', color: 'var(--secondary)', fontSize: '18px'}}>Alocações da Equipe (Mês de Prestação)</h2>
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '4px 8px', borderRadius: '6px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>De:</span>
+          <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} />
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Até:</span>
+          <input type="date" className="form-control" style={{ width: '120px', padding: '2px 4px', fontSize: '12px' }} value={dataFim} onChange={(e) => setDataFim(e.target.value)} />
+          {(dataInicio || dataFim) && (
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '2px 8px', fontSize: '11px' }}
+              onClick={() => { setDataInicio(''); setDataFim(''); }}
+            >
+              Limpar
+            </button>
+          )}
+        </div>
         <label style={{fontWeight: 600, color: 'var(--secondary)'}}>Ano Base:</label>
         <select
           className="form-control"
