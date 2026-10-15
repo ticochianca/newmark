@@ -31,6 +31,7 @@ function RelatorioMensal() {
   const de = sp.get('de') || '';
   const ate = sp.get('ate') || '';
   const cliente = sp.get('cliente') || '';
+  const usarDatasForcadas = sp.get('forcadas') !== '0';
 
   const [parcelas, setParcelas] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -56,7 +57,7 @@ function RelatorioMensal() {
       if (error) { console.error(error); setLoading(false); return; }
 
       // data_antecipacao, quando preenchida, substitui data_pagamento só para fins de agrupamento
-      let filtered = (data || []).map(p => ({ ...p, _data: p.data_antecipacao || p.data_pagamento }));
+      let filtered = (data || []).map(p => ({ ...p, _data: usarDatasForcadas ? (p.data_antecipacao || p.data_pagamento) : p.data_pagamento }));
       if (de) filtered = filtered.filter(p => p._data >= de);
       if (ate) filtered = filtered.filter(p => p._data <= ate);
       if (cliente) {
@@ -196,6 +197,7 @@ function RelatorioMensal() {
             <div className="report-meta">
               <span>Período: <strong>{labelPeriodo}</strong></span>
               {cliente && <span>Cliente: <strong>{cliente}</strong></span>}
+              <span>Datas consideradas: <strong>{usarDatasForcadas ? 'Forçadas (quando houver)' : 'Realizadas'}</strong></span>
               <span>Emitido em: <strong>{new Date().toLocaleString('pt-BR')}</strong></span>
               {usuario && <span>Usuário: <strong>{usuario}</strong></span>}
             </div>

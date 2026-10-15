@@ -12,6 +12,7 @@ export default function ParcelasModule() {
   const [connections, setConnections] = useState([]);
   const [hoveredParcela, setHoveredParcela] = useState(null);
   const [mostrarAlocacao, setMostrarAlocacao] = useState(false);
+  const [usarDatasForcadas, setUsarDatasForcadas] = useState(true);
   const [anosDisponiveis, setAnosDisponiveis] = useState([]);
   const [viewMode, setViewMode] = useState('cronograma'); // 'cronograma' | 'tabela' | 'atrasadas' | 'trimestral'
   const [filtroCliente, setFiltroCliente] = useState('');
@@ -24,6 +25,7 @@ export default function ParcelasModule() {
   const [loadingTrimestral, setLoadingTrimestral] = useState(false);
   const [trimDe, setTrimDe] = useState('');
   const [trimAte, setTrimAte] = useState('');
+  const [mensagemModal, setMensagemModal] = useState({ isOpen: false, mes: '', texto: '', loading: false, copiado: false });
 
   const tableWrapperRef = useRef(null);
 
@@ -55,7 +57,7 @@ export default function ParcelasModule() {
         }
         
         // data_antecipacao, quando preenchida, substitui data_pagamento só para fins de agrupamento/análise
-        const dataRecebimento = p.data_antecipacao || p.data_pagamento;
+        const dataRecebimento = usarDatasForcadas ? (p.data_antecipacao || p.data_pagamento) : p.data_pagamento;
         const isPaidInDiffMonth = p.status === 'Paga' && dataRecebimento && p.data_vencimento.substring(0,7) !== dataRecebimento.substring(0,7);
         const activeDate = (p.status === 'Paga' && dataRecebimento) ? dataRecebimento : p.data_vencimento;
         
@@ -104,8 +106,8 @@ export default function ParcelasModule() {
     setLoading(false);
   };
 
-  // Parcelas em atraso: status ainda aberto (não Paga/Reprogramada/Congelada — mesma
-  // definição usada em getStatusDisplay) e vencimento no passado, independente do
+  // Parcelas em atraso: status ainda aberto (não Paga/Congelada — Reprogramada segue em aberto
+  // com a nova data; mesma definição usada em getStatusDisplay) e vencimento no passado, independente do
   // Ano Base selecionado — para não esconder atrasos de anos anteriores.
   const fetchAtrasadas = async () => {
     setLoadingAtrasadas(true);
@@ -113,7 +115,7 @@ export default function ParcelasModule() {
     const { data, error } = await supabase
       .from('parcelas')
       .select('*, contratos(id, titulo, cobranca_mesmo_mes, clientes(nome, apelido), contrato_atendentes(*, profiles(nome)))')
-      .not('status', 'in', '(Paga,Reprogramada,Congelada)')
+      .not('status', 'in', '(Paga,Congelada)')
       .lt('data_vencimento', hoje)
       .order('data_vencimento', { ascending: true });
 
@@ -140,7 +142,7 @@ export default function ParcelasModule() {
     if (error) {
       console.error('Erro ao buscar recebimentos:', error);
     } else {
-      setRecebidoPago((data || []).map(p => ({ ...p, _data: p.data_antecipacao || p.data_pagamento })));
+      setRecebidoPago(data || []);
     }
     setLoadingTrimestral(false);
   };
@@ -154,7 +156,7 @@ export default function ParcelasModule() {
 
   useEffect(() => {
     fetchParcelas();
-  }, [anoSelecionado, dataInicio, dataFim]);
+  }, [anoSelecionado, dataInicio, dataFim, usarDatasForcadas]);
 
   // Badge com a contagem de atrasadas, carregado uma vez ao abrir o módulo
   useEffect(() => {
@@ -163,7 +165,7 @@ export default function ParcelasModule() {
       const { count } = await supabase
         .from('parcelas')
         .select('*', { count: 'exact', head: true })
-        .not('status', 'in', '(Paga,Reprogramada,Congelada)')
+        .not('status', 'in', '(Paga,Congelada)')
         .lt('data_vencimento', hoje);
       setAtrasadasCount(count || 0);
     };
@@ -283,7 +285,7 @@ export default function ParcelasModule() {
       isOpen: true,
       parcela: p,
       realId: realId,
-      mode: defaultMode || (isCongelada ? 'emitir_pontual' : (p.status === 'Paga' ? 'desfazer_pagamento' : 'pagar')),
+      mode: defaultMode || (isCongelada ? 'emitir_pontual' : (p.status === 'Paga' ? 'manter_pago' : 'pagar')),
       data: p.status === 'Paga' ? (p.data_pagamento || '') : new Date().toISOString().split('T')[0],
       nfNumero: p.nf_numero || '',
       boletoVencimento: p.data_vencimento || '',
@@ -440,6 +442,15 @@ export default function ParcelasModule() {
       if (error) alert('Erro: ' + error.message);
       else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
     }
+    else if (mode === 'manter_pago') {
+      // Edita NF/valor/antecipação sem desfazer o pagamento
+      const { error } = await supabase
+        .from('parcelas')
+        .update({ ...nfUpdate, ...valorUpdate, ...buildHistoricoValor(), ...antecipacaoUpdate })
+        .eq('id', realId);
+      if (error) alert('Erro: ' + error.message);
+      else { setModalState({ isOpen: false, parcela: null }); refetchAll(); }
+    }
   };
 
   const handleDeleteHistory = async (indexToRemove) => {
@@ -490,8 +501,9 @@ export default function ParcelasModule() {
   };
 
   const getStatusDisplay = (p) => {
-    if (p.status === 'Paga' || p.status === 'Reprogramada' || p.status === 'Congelada') return p.status;
+    if (p.status === 'Paga' || p.status === 'Congelada') return p.status;
 
+    // Reprogramada continua em aberto: passa a "Em atraso" se a nova data também vencer
     const dataVenc = new Date(p.data_vencimento);
     const hoje = new Date();
     hoje.setHours(0,0,0,0);
@@ -508,6 +520,9 @@ export default function ParcelasModule() {
   const getVisualStyles = (status, p) => {
     switch(status) {
       case 'Paga':
+        if (p.data_antecipacao) {
+          return { color: '#0d9488', bg: '#ccfbf1', text: `↪ ${formatDayMonth(p.data_antecipacao)}` };
+        }
         return { color: '#10b981', bg: '#ecfdf5', text: `Pago: ${formatDayMonth(p.data_pagamento)}` };
       case 'Em atraso':
         return { color: '#ef4444', bg: '#fef2f2', text: `Venceu: ${formatDayMonth(p.data_vencimento)}` };
@@ -532,6 +547,70 @@ export default function ParcelasModule() {
     const mes = dateObj.toLocaleString('pt-BR', { month: 'long', timeZone: 'UTC' });
     const ano = dateObj.getUTCFullYear();
     return `${mes.charAt(0).toUpperCase() + mes.slice(1)}/${ano}`;
+  };
+
+  // Mensagem para os responsáveis (maior alocação no contrato) com as parcelas previstas no mês
+  const gerarMensagemResponsaveis = async (mes) => {
+    setMensagemModal(m => ({ ...m, isOpen: true, mes, loading: true, copiado: false }));
+    const [ano, mm] = mes.split('-').map(Number);
+    const inicio = `${mes}-01`;
+    const fim = new Date(Date.UTC(ano, mm, 0)).toISOString().split('T')[0];
+
+    const { data, error } = await supabase
+      .from('parcelas')
+      .select('*, contratos(id, titulo, cobranca_mesmo_mes, clientes(nome, apelido), contrato_atendentes(*, profiles(nome)))')
+      .gte('data_vencimento', inicio)
+      .lte('data_vencimento', fim)
+      // Reprogramada continua em aberto (a própria parcela com a nova data de vencimento)
+      .not('status', 'in', '(Paga,Congelada)')
+      .order('data_vencimento', { ascending: true });
+
+    if (error) {
+      setMensagemModal(m => ({ ...m, loading: false, texto: 'Erro ao buscar parcelas: ' + error.message }));
+      return;
+    }
+
+    // responsável -> { "cliente|competência": { cliente, competencia, valor } }
+    const porResponsavel = {};
+    (data || []).forEach(p => {
+      const allocs = getActiveAllocations(p);
+      const principal = allocs.reduce((best, a) => (!best || Number(a.percentual) > Number(best.percentual) ? a : best), null);
+      const responsavel = principal?.profiles?.nome || 'Sem responsável';
+      const cliente = p.contratos?.clientes?.apelido || p.contratos?.clientes?.nome || 'Cliente sem nome';
+      const competencia = getMesPrestacao(p).toLowerCase();
+      const key = `${cliente}|${competencia}`;
+      if (!porResponsavel[responsavel]) porResponsavel[responsavel] = {};
+      if (!porResponsavel[responsavel][key]) porResponsavel[responsavel][key] = { cliente, competencia, valor: 0 };
+      porResponsavel[responsavel][key].valor += Number(p.valor || 0);
+    });
+
+    const responsaveis = Object.keys(porResponsavel).sort((a, b) => {
+      if (a === 'Sem responsável') return 1;
+      if (b === 'Sem responsável') return -1;
+      return a.localeCompare(b);
+    });
+
+    const blocos = responsaveis.map(resp => {
+      const linhas = Object.values(porResponsavel[resp])
+        .sort((a, b) => a.cliente.localeCompare(b.cliente))
+        .map(i => `*${i.cliente}* - R$ ${i.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} - serviços prestados em ${i.competencia}`);
+      return `*${resp}*\n\n${linhas.join('\n')}`;
+    });
+
+    const texto = blocos.length
+      ? `Olá, seguem clientes com faturamento previsto para pagamentos neste mês:\n\n${blocos.join('\n\n')}`
+      : 'Nenhuma parcela em aberto prevista para este mês.';
+
+    setMensagemModal(m => ({ ...m, loading: false, texto }));
+  };
+
+  const copiarMensagem = async () => {
+    try {
+      await navigator.clipboard.writeText(mensagemModal.texto);
+      setMensagemModal(m => ({ ...m, copiado: true }));
+    } catch {
+      alert('Não foi possível copiar automaticamente. Selecione o texto e copie manualmente.');
+    }
   };
 
   const mesesHeaders = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -591,17 +670,19 @@ export default function ParcelasModule() {
     return { dir: pct > 0 ? 'up' : 'down', pct };
   };
 
-  const recebidoFiltrado = recebidoPago.filter(p => {
-    if (filtroCliente) {
-      const nome = (p.contratos?.clientes?.nome || '').toLowerCase();
-      const apelido = (p.contratos?.clientes?.apelido || '').toLowerCase();
-      const termo = filtroCliente.toLowerCase();
-      if (!nome.includes(termo) && !apelido.includes(termo)) return false;
-    }
-    if (trimDe && p._data < trimDe) return false;
-    if (trimAte && p._data > trimAte) return false;
-    return true;
-  });
+  const recebidoFiltrado = recebidoPago
+    .map(p => ({ ...p, _data: usarDatasForcadas ? (p.data_antecipacao || p.data_pagamento) : p.data_pagamento }))
+    .filter(p => {
+      if (filtroCliente) {
+        const nome = (p.contratos?.clientes?.nome || '').toLowerCase();
+        const apelido = (p.contratos?.clientes?.apelido || '').toLowerCase();
+        const termo = filtroCliente.toLowerCase();
+        if (!nome.includes(termo) && !apelido.includes(termo)) return false;
+      }
+      if (trimDe && p._data < trimDe) return false;
+      if (trimAte && p._data > trimAte) return false;
+      return true;
+    });
 
   const trimestres = Array.from(new Set(recebidoFiltrado.map(p => getQuarterKey(p._data)))).sort();
 
@@ -704,6 +785,23 @@ export default function ParcelasModule() {
           onClick={() => setMostrarAlocacao(!mostrarAlocacao)}
         >
           {mostrarAlocacao ? 'Omitir Alocação' : 'Mostrar Alocação'}
+        </button>
+
+        <label
+          title="Quando ligado, parcelas com 'Forçar antecipação' contam no mês/trimestre da data forçada. Quando desligado, usa sempre a data real do pagamento."
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600, color: '#0d9488', cursor: 'pointer', backgroundColor: '#ccfbf1', padding: '6px 12px', borderRadius: '6px', border: '1px solid #99f6e4' }}
+        >
+          <input type="checkbox" checked={usarDatasForcadas} onChange={(e) => setUsarDatasForcadas(e.target.checked)} />
+          {usarDatasForcadas ? 'Datas forçadas' : 'Datas realizadas'}
+        </label>
+
+        <button
+          className="btn btn-secondary"
+          style={{ fontSize: '14px', padding: '6px 12px' }}
+          title="Gera mensagem com as parcelas do mês agrupadas pelo responsável de maior alocação"
+          onClick={() => gerarMensagemResponsaveis(new Date().toISOString().slice(0, 7))}
+        >
+          💬 Mensagem Responsáveis
         </button>
 
         {!isPivotView && (
@@ -846,6 +944,7 @@ export default function ParcelasModule() {
                 if (trimDe) params.set('de', trimDe);
                 if (trimAte) params.set('ate', trimAte);
                 if (filtroCliente) params.set('cliente', filtroCliente);
+                params.set('forcadas', usarDatasForcadas ? '1' : '0');
                 window.open(`/relatorio/trimestral?${params.toString()}`, '_blank');
               }}
             >
@@ -975,6 +1074,7 @@ export default function ParcelasModule() {
                 if (trimDe) params.set('de', trimDe);
                 if (trimAte) params.set('ate', trimAte);
                 if (filtroCliente) params.set('cliente', filtroCliente);
+                params.set('forcadas', usarDatasForcadas ? '1' : '0');
                 window.open(`/relatorio/mensal?${params.toString()}`, '_blank');
               }}
             >
@@ -1649,10 +1749,12 @@ export default function ParcelasModule() {
                             data: newMode === 'pagar' ? new Date().toISOString().split('T')[0] : modalState.parcela.data_vencimento
                           });
                         }}
-                        disabled={modalState.parcela.status === 'Paga'}
                       >
                         {modalState.parcela.status === 'Paga' ? (
-                          <option value="desfazer_pagamento">Desfazer Pagamento</option>
+                          <>
+                            <option value="manter_pago">Editar (manter pago)</option>
+                            <option value="desfazer_pagamento">Desfazer Pagamento</option>
+                          </>
                         ) : (
                           <>
                             <option value="pagar">Registrar Pagamento</option>
@@ -1663,7 +1765,7 @@ export default function ParcelasModule() {
                       </select>
                     </div>
 
-                    {modalState.mode !== 'ajustar_valor' && (
+                    {modalState.mode !== 'ajustar_valor' && modalState.mode !== 'manter_pago' && (
                       <div className="form-group">
                         <label>
                           {modalState.mode === 'pagar' ? 'Data do Pagamento' :
@@ -1680,7 +1782,14 @@ export default function ParcelasModule() {
                       </div>
                     )}
 
-                    {(modalState.mode === 'pagar' || modalState.mode === 'desfazer_pagamento') && (
+                    {modalState.mode === 'manter_pago' && (
+                      <div className="form-group">
+                        <label>Pago em</label>
+                        <input type="date" className="form-control" value={modalState.parcela.data_pagamento || ''} disabled />
+                      </div>
+                    )}
+
+                    {(modalState.mode === 'pagar' || modalState.mode === 'desfazer_pagamento' || modalState.mode === 'manter_pago') && (
                       <div className="form-group">
                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600 }}>
                           <input
@@ -1755,6 +1864,51 @@ export default function ParcelasModule() {
             </button>
             <button type="submit" form="form-action" className="btn btn-primary">
               {modalState.mode === 'emitir_pontual' ? 'Emitir Parcela' : modalState.mode === 'ajustar_valor' ? 'Salvar Valor' : 'Confirmar'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Mensagem para responsáveis */}
+      <div className={`modal-overlay ${mensagemModal.isOpen ? 'active' : ''}`}>
+        <div className="modal" style={{maxWidth: '640px'}}>
+          <div className="modal-header">
+            <h2>💬 Mensagem para Responsáveis</h2>
+            <button className="close-modal" onClick={() => setMensagemModal(m => ({ ...m, isOpen: false }))}>&times;</button>
+          </div>
+          <div className="modal-body">
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px' }}>
+              <label style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>Mês de vencimento:</label>
+              <input
+                type="month"
+                className="form-control"
+                style={{ width: '170px' }}
+                value={mensagemModal.mes}
+                onChange={(e) => e.target.value && gerarMensagemResponsaveis(e.target.value)}
+              />
+            </div>
+            <p style={{ fontSize: '12px', color: '#64748b', margin: '0 0 8px' }}>
+              Parcelas em aberto do mês (inclui reprogramadas; exceto pagas e congeladas), agrupadas pelo responsável com maior alocação no contrato. O texto pode ser editado antes de copiar.
+            </p>
+            <textarea
+              className="form-control"
+              style={{ width: '100%', minHeight: '320px', fontFamily: 'inherit', fontSize: '13px', whiteSpace: 'pre-wrap' }}
+              value={mensagemModal.loading ? 'Carregando...' : mensagemModal.texto}
+              disabled={mensagemModal.loading}
+              onChange={(e) => setMensagemModal(m => ({ ...m, texto: e.target.value, copiado: false }))}
+            />
+          </div>
+          <div className="modal-footer">
+            <button className="btn btn-secondary" onClick={() => setMensagemModal(m => ({ ...m, isOpen: false }))}>Fechar</button>
+            <button
+              className="btn btn-secondary"
+              disabled={mensagemModal.loading || !mensagemModal.texto}
+              onClick={() => window.open(`https://wa.me/?text=${encodeURIComponent(mensagemModal.texto)}`, '_blank')}
+            >
+              Abrir no WhatsApp
+            </button>
+            <button className="btn btn-primary" disabled={mensagemModal.loading || !mensagemModal.texto} onClick={copiarMensagem}>
+              {mensagemModal.copiado ? '✓ Copiado' : 'Copiar'}
             </button>
           </div>
         </div>

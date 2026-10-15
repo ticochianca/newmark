@@ -13,9 +13,10 @@ const fmt = (v) => v != null
 const fmtDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('pt-BR') : '—';
 
 function getStatus(p) {
-  if (['Paga', 'Reprogramada', 'Congelada'].includes(p.status)) return p.status;
+  if (['Paga', 'Congelada'].includes(p.status)) return p.status;
   const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-  return new Date(p.data_vencimento) < hoje ? 'Em atraso' : 'Pendente';
+  if (new Date(p.data_vencimento) < hoje) return 'Em atraso';
+  return p.status === 'Reprogramada' ? 'Reprogramada' : 'Pendente';
 }
 
 function getInitials(nome) {
